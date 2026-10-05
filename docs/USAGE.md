@@ -13,6 +13,7 @@ CMD 中运行 `research-data.cmd open`。已安装包时用 `research-data open`
 | 导入已经存在的文件 | `guide import` | `profile`、`import` |
 | 复用绘图风格和配方 | `guide plot` | `themes`、`plot` |
 | 让 agent 决定工作流程 | `guide agent --json` | `help --json`、`guide --json` |
+| 项目自定义数据和多面板绘图 | `guide customize` | `project init/show/check/save-plot` |
 
 所有命令可用 `COMMAND --help` 查看参数，也可用 `help COMMAND` 获得参数和
 例子。`help COMMAND --json` 含必填项、默认值和可选值，来自当前版本的真实

@@ -1,3 +1,22 @@
+# 0.2.0 项目模板与图表编辑验证
+
+2026-10-05，Windows / Python 3.13.12。合成数据仅用于软件验证。
+
+| 验证 | 结果 |
+|---|---|
+| 完整回归测试 | 55 passed；已有 NetCDF/NumPy ABI warning 保留，值/坐标断言通过 |
+| 项目模板 | 初始化、拒绝覆盖、配置检查、导入映射、模板保存、原始字节/哈希/Git 冻结，以及生成程序修改配置后的快照一致性 |
+| 绘图与浏览器 | 13 项 renderer 测试和 5 项 AppTest；真实页面载入项目多面板、切换字体和字号、生成预览 |
+| 预览一致性 | 实际浏览器 SVG 背景为 rgb(17,17,17)，文字为 rgb(242,245,250)，字体为 Times New Roman；显式颜色避免宿主覆盖模板 |
+| 静态导出 | 实际生成 PNG/SVG/PDF；深色 SVG 另行检查背景与字体；使用配置的 Chromium |
+| 命令发现 | 26 个命令、6 类 workflow；project 与 guide customize 提供文本及 JSON 帮助 |
+
+安装包、发布与 Windows/Linux CI 的最终证据见对应 GitHub release 和 Actions。
+全局及项目内的 agent skill 已同步项目模板用法。数据文件、测试目录和虚拟环境不提交。
+以上验证不证明物理模型、实验结果或数值收敛正确。
+
+![Actual browser multi-panel preview](project-panels.png)
+
 # 0.1.1 启动与帮助验证
 
 2026-10-05，Windows / Python 3.13.12。

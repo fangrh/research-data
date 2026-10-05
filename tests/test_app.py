@@ -39,13 +39,13 @@ def test_streamlit_app_loads_catalog_and_renders_plot(tmp_path, monkeypatch):
     params = analysis[0]["parameters"]
     assert params["inputs"][0]["run_id"] == run.run_id
     assert params["recipe"]["x"] == "x"
-    assert {Path(item["path"]).name for item in params["source_snapshot"]} == {"app.py", "plotting.py"}
+    assert {Path(item["path"]).name for item in params["source_snapshot"]} >= {"app.py", "plotting.py", "project.py"}
     assert analysis[0]["provenance"]["status"] == "captured"
     from research_data.provenance import inspect_snapshot
     assert inspect_snapshot(analysis[0]["provenance"], catalog.root / "runs" / analysis[0]["run_id"])["ok"]
 
 
-def test_recipe_compare_frozen_registration_and_selection_reset(tmp_path, monkeypatch):
+def test_recipe_compare_live_style_registration_and_selection_reset(tmp_path, monkeypatch):
     import sys
     monkeypatch.setattr(sys, "argv", ["streamlit"])
     from research_data.catalog import Catalog
@@ -63,7 +63,7 @@ def test_recipe_compare_frozen_registration_and_selection_reset(tmp_path, monkey
     cat.save_recipe("compare", {"kind": "compare", "x": "x", "y": "y", "theme": "midnight", "title": "Frozen comparison"})
     app = AppTest.from_file(Path(__file__).parents[1] / "src" / "research_data" / "app.py", default_timeout=20).run()
     def widget(collection, label):
-        return next(item for item in collection if item.label == label)
+        return next(item for item in collection if item.label == label or getattr(item, "key", None) == label)
     selector = widget(app.multiselect, "选择运行（可多选比较）")
     selector.set_value(selector.options).run()
     widget(app.button, "加载所选运行").click().run()
@@ -76,11 +76,97 @@ def test_recipe_compare_frozen_registration_and_selection_reset(tmp_path, monkey
     assert len(app.session_state["figure"].data) == 2
     assert list(app.session_state["figure"].data[0].x) == [2, 1]
     widget(app.selectbox, "风格").set_value("paper").run()
+    widget(app.number_input, "线宽").set_value(4.0).run()
     widget(app.button, "登记分析图").click().run()
     analysis = cat.list_runs(filters={"kind": "analysis"})[0]
-    assert analysis["parameters"]["recipe"]["theme"] == "midnight"
+    assert analysis["parameters"]["recipe"]["theme"] == "paper"
+    assert analysis["parameters"]["recipe"]["style"]["line_width"] == 4.0
     assert analysis["parent_run_ids"] == [r.run_id for r in runs]
     selector = widget(app.multiselect, "选择运行（可多选比较）")
     selector.set_value(selector.options[:1]).run()
     assert "figure" not in app.session_state
     assert not app.exception
+
+
+def test_project_templates_panels_profile_save_origin_and_live_style(tmp_path, monkeypatch):
+    import json
+    import pandas as pd
+    from research_data.catalog import Catalog
+    from research_data.project import ProjectTemplates
+    from streamlit.testing.v1 import AppTest
+
+    cat = Catalog(tmp_path / "catalog")
+    source = tmp_path / "values.csv"
+    pd.DataFrame({"x": [1, 2, 3], "y": [2, 4, 8]}).to_csv(source, index=False)
+    with cat.run(title="Project template run", project="run-label") as run:
+        run.add_artifact(source, profile={"x": "x"})
+    project = tmp_path / "project"
+    ProjectTemplates.initialize(project)
+    config_path = project / "research-data.project.json"
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    config["profiles"]["custom"] = {"x": "x", "rename": {"y": "signal"}}
+    config["plots"]["panel-template"] = {
+        "kind": "panels", "columns": 2, "theme": "midnight", "x": "x", "y": ["y"],
+        "log_x": True, "x_label": "frequency", "layout": {"plot_bgcolor": "#ffffff"},
+        "style": {"font_family": "Courier New", "font_size": 16, "title_size": 26,
+                   "axis_title_size": 15, "tick_size": 12, "legend_size": 12,
+                   "line_width": 2, "marker_size": 7, "line_dash": "solid",
+                   "show_grid": True, "show_legend": True, "legend_position": "bottom",
+                   "colors": ["#123456"], "colorscale": "Viridis"},
+        "panels": [
+            {"kind": "line", "x": "x", "y": "y", "title": "A"},
+            {"kind": "line", "x": "x", "y": "y", "title": "B"},
+        ],
+    }
+    config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
+    monkeypatch.setenv("RESEARCH_DATA_CATALOG", str(cat.root))
+    app = AppTest.from_file(Path(__file__).parents[1] / "src" / "research_data" / "app.py", default_timeout=30).run()
+
+    def widget(collection, label):
+        return next(item for item in collection if item.label == label or getattr(item, "key", None) == label)
+
+    widget(app.text_input, "catalog_root").set_value(str(cat.root))
+    widget(app.text_input, "project_dir").set_value(str(project)).run()
+    widget(app.selectbox, "项目 profile").set_value("custom").run()
+    widget(app.button, "应用 profile").click().run()
+    assert '"x": "x"' in widget(app.text_area, "mapping JSON").value
+    widget(app.multiselect, "选择运行（可多选比较）").set_value(widget(app.multiselect, "选择运行（可多选比较）").options).run()
+    widget(app.button, "加载所选运行").click().run()
+    widget(app.selectbox, "已保存配方").set_value("project:panel-template").run()
+    widget(app.button, "应用模板").click().run()
+    assert widget(app.selectbox, "图形").value == "panels"
+    assert widget(app.number_input, "标题字号").value == 26
+    assert app.session_state["loaded_recipe"]["log_x"] is True
+    assert app.session_state["loaded_recipe"]["layout"]["plot_bgcolor"] == "#ffffff"
+    widget(app.selectbox, "字体预设").set_value("衬线").run()
+    assert widget(app.text_input, "字体").value == "Times New Roman"
+    widget(app.text_input, "配方名称").set_value("new-project-plot")
+    widget(app.button, "保存到项目").click().run()
+    reloaded = ProjectTemplates(project)
+    assert "new-project-plot" in reloaded.config["plots"]
+    widget(app.button, "生成图表").click().run()
+    assert not list(app.exception)
+    widget(app.number_input, "标题字号").set_value(31).run()
+    assert app.session_state["figure"].layout.title.font.size == 31
+    widget(app.button, "登记分析图").click().run()
+    analysis = cat.list_runs(filters={"kind": "analysis"})[0]
+    frozen = analysis["parameters"]["recipe"]
+    assert frozen["kind"] == "panels"
+    assert frozen["style"]["title_size"] == 31
+    assert frozen["_project_template"]["name"] == "panel-template"
+    assert analysis["parameters"]["project_template"]["sha256"] == frozen["_project_template"]["sha256"]
+
+
+def test_project_dir_query_parameter_selects_template_project(tmp_path, monkeypatch):
+    from research_data.catalog import Catalog
+    from research_data.project import ProjectTemplates
+    from streamlit.testing.v1 import AppTest
+
+    catalog = Catalog(tmp_path / "catalog")
+    project = tmp_path / "project"
+    ProjectTemplates.initialize(project)
+    monkeypatch.setenv("RESEARCH_DATA_CATALOG", str(catalog.root))
+    app = AppTest.from_file(Path(__file__).parents[1] / "src" / "research_data" / "app.py")
+    app.query_params["project_dir"] = str(project)
+    app.run()
+    assert next(item for item in app.text_input if item.key == "project_dir").value == str(project)

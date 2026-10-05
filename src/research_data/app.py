@@ -1,6 +1,6 @@
 """Chinese Streamlit browser; launch with ``streamlit run app.py -- ROOT``."""
 from __future__ import annotations
-import argparse, hashlib, json, tempfile, zipfile
+import argparse, copy, hashlib, json, os, tempfile, zipfile
 from pathlib import Path
 from typing import Any
 from research_data.plotting import THEMES, export_plot, render_plot
@@ -8,6 +8,63 @@ from research_data.plotting import THEMES, export_plot, render_plot
 def _catalog(root: str):
     from research_data.catalog import Catalog
     return Catalog(Path(root))
+
+def _project_api():
+    try:
+        from research_data.project import CONFIG_NAME, ProjectTemplates
+        return CONFIG_NAME, ProjectTemplates
+    except Exception:
+        return "research-data.project.json", None
+
+def _style_defaults(theme: str = "paper"):
+    return {"font_family": "Arial", "font_size": 14, "title_size": 20,
+            "axis_title_size": 15, "tick_size": 12, "legend_size": 12,
+            "line_width": 2, "marker_size": 7, "line_dash": "solid",
+            "show_grid": True, "show_legend": True, "legend_position": "bottom",
+            "colors": list(THEMES.get(theme, THEMES["paper"]).get("colors", [])),
+            "colorscale": "Viridis"}
+
+def _project_origin(recipe):
+    origin = recipe.get("_project_template") if isinstance(recipe, dict) else None
+    return copy.deepcopy(origin) if isinstance(origin, dict) else None
+
+def _validate_template_recipe(recipe):
+    if not isinstance(recipe, dict):
+        raise ValueError("模板配方必须是 JSON 对象")
+    kind = str(recipe.get("kind", "line")).lower()
+    if kind not in {"line", "scatter", "compare", "heatmap", "complex", "panels"}:
+        raise ValueError(f"模板图形类型 {kind!r} 不受支持")
+    if kind == "panels" and (not isinstance(recipe.get("panels"), list) or not recipe["panels"]):
+        raise ValueError("多面板模板必须包含非空 panels 列表")
+    if "style" in recipe and not isinstance(recipe["style"], dict):
+        raise ValueError("模板 style 必须是 JSON 对象")
+    if "layout" in recipe and not isinstance(recipe["layout"], dict):
+        raise ValueError("模板 layout 必须是 JSON 对象")
+    return recipe
+
+def _font_preset(family):
+    if family == "Times New Roman":
+        return "衬线"
+    if family == "Courier New":
+        return "等宽"
+    if family == "Arial":
+        return "无衬线"
+    return "自定义"
+
+def _set_font_preset(st, select_key, widget_key):
+    preset = st.session_state.get(select_key)
+    values = {"无衬线": "Arial", "衬线": "Times New Roman", "等宽": "Courier New"}
+    if preset in values:
+        st.session_state[widget_key] = values[preset]
+
+def _validate_recipe_for_data(recipe, datasets, labels):
+    recipe = _validate_template_recipe(recipe)
+    if datasets:
+        render_plot(datasets, recipe, labels=labels)
+    return recipe
+
+def _template_label(name, project):
+    return f"project:{name}" if project else str(name)
 
 def _categories(runs):
     values = {"全部"}
@@ -28,7 +85,7 @@ def _reset_on_run_change(st, identity):
     if st.session_state.get("selected_identity") != identity:
         st.session_state["selected_identity"] = identity
         st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
-        for key in ("datasets", "dataset_ids", "figure", "figure_recipe", "figure_inputs", "figure_source_snapshot", "figure_provenance", "figure_archive", "static_download", "loaded_recipe", "plot_x", "plot_y", "plot_kind", "plot_z", "plot_y_axis", "plot_component", "plot_theme"):
+        for key in ("datasets", "dataset_ids", "figure", "figure_recipe", "figure_inputs", "figure_source_snapshot", "figure_provenance", "figure_archive", "static_download", "loaded_recipe", "figure_generated", "project_recipe_names", "plot_x", "plot_y", "plot_kind", "plot_z", "plot_y_axis", "plot_component", "plot_theme"):
             st.session_state.pop(key, None)
 
 def _run_card(st, run):
@@ -62,6 +119,30 @@ def main(root: str | None = None) -> None:
     with st.sidebar:
         st.text_input("Catalog 根目录", value=str(root), key="catalog_root")
         root = st.session_state.catalog_root
+        query_project = st.query_params.get("project_dir") if hasattr(st, "query_params") else None
+        if query_project and st.session_state.get("_last_query_project_dir") != query_project:
+            st.session_state["project_dir"] = str(query_project)
+        st.session_state["_last_query_project_dir"] = query_project
+        project_default = str(query_project or os.environ.get("RESEARCH_DATA_PROJECT", str(Path.cwd())))
+        project_dir = st.text_input("模板项目目录", value=project_default, key="project_dir")
+        st.session_state["project_templates"] = None
+        _config_name, _ProjectTemplates = _project_api()
+        project_path = Path(project_dir).expanduser() if project_dir else None
+        if _ProjectTemplates and project_path and project_path.is_dir() and (project_path / _config_name).is_file():
+            try:
+                st.session_state["project_templates"] = _ProjectTemplates(project_path)
+            except Exception as exc:
+                st.error(f"模板项目配置不可用：{exc}")
+        elif project_path and project_path.is_dir() and (project_path / _config_name).exists():
+            st.error(f"模板项目配置不可用：{project_path / _config_name}")
+        elif project_path and (project_path / _config_name).exists():
+            st.error(f"模板项目目录不是目录：{project_path}")
+        if _ProjectTemplates and project_path and st.button("初始化模板项目"):
+            try:
+                _ProjectTemplates.initialize(project_path)
+                st.success("模板项目已初始化；重新加载后可使用模板。")
+            except Exception as exc:
+                st.error(f"初始化模板项目失败：{exc}")
         with st.expander("使用帮助 / Help"):
             st.markdown("这是本地 Web 应用，数据保存在所选 Catalog。\n\n"
                         "**生成新数据：** 用 `run` 包装计算或实验脚本。\n\n"
@@ -81,6 +162,17 @@ def main(root: str | None = None) -> None:
     with st.expander("首次导入 / Import profile", expanded=not bool(runs)):
         st.caption("填写文件路径和 JSON mapping；配置会作为 artifact profile 保存。")
         path = st.text_input("数据文件路径", key="import_path")
+        project_templates = st.session_state.get("project_templates")
+        profile_names = sorted((project_templates.config.get("profiles", {}) if project_templates else {}) or {})
+        profile_choice = st.selectbox("项目 profile", ["（无）", *profile_names], key="import_profile")
+        if profile_choice != "（无）" and st.button("应用 profile"):
+            try:
+                profile = project_templates.profile(profile_choice)
+                st.session_state["import_mapping"] = json.dumps(profile, ensure_ascii=False, indent=2)
+                st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
+                st.rerun()
+            except Exception as exc:
+                st.error(f"无法应用 profile：{exc}")
         mapping_text = st.text_area("mapping JSON", value='{"x": "time"}', key="import_mapping")
         title = st.text_input("实验标题", value="首次导入", key="import_title")
         if st.button("导入并登记"):
@@ -154,12 +246,14 @@ def main(root: str | None = None) -> None:
         try: st.dataframe(ds.to_dataframe().reset_index().head(100), use_container_width=True)
         except Exception as exc: st.warning(f"表格预览不可用：{exc}")
     st.subheader("绘图"); names, axes = list(ds.data_vars), list(ds.coords) or list(ds.variables)
-    loaded = st.session_state.get("loaded_recipe", {})
+    axes = list(dict.fromkeys([*axes, *[name for name, value in ds.data_vars.items() if value.ndim == 1]]))
+    loaded_recipe = copy.deepcopy(st.session_state.get("loaded_recipe", {}))
+    loaded = {**loaded_recipe, **(loaded_recipe.get("style", {}) if isinstance(loaded_recipe.get("style"), dict) else {})}
     x_default = loaded.get("x") if loaded.get("x") in axes else axes[0]
     y_default = [v for v in (loaded.get("y") if isinstance(loaded.get("y"), list) else [loaded.get("y")]) if v in names] or names[:1]
     rev = int(st.session_state.get("widget_rev", 0))
     x, y = st.selectbox("X 变量", axes, index=axes.index(x_default), key=f"plot_x_{rev}"), st.multiselect("Y 变量", names, default=y_default, key=f"plot_y_{rev}")
-    kinds = ["line", "scatter", "compare", "heatmap", "complex"]
+    kinds = ["line", "scatter", "compare", "heatmap", "complex", "panels"]
     kind = st.selectbox("图形", kinds, index=kinds.index(loaded.get("kind")) if loaded.get("kind") in kinds else 0, key=f"plot_kind_{rev}")
     z_default = loaded.get("z") if loaded.get("z") in names else (y[0] if y else names[0])
     if kind == "heatmap":
@@ -171,35 +265,125 @@ def main(root: str | None = None) -> None:
     slice_dims = [dim for dim in ds.sizes if dim != x and not (kind == "heatmap" and dim == y_axis)]
     slices = {dim: st.number_input(f"切片 {dim}（整数索引）", 0, max(0, ds.sizes[dim] - 1), int((loaded.get("slices") or {}).get(dim, 0)), key=f"slice_{dim}_{rev}") for dim in slice_dims}
     recipe_title = loaded.get("title") or run.get("title", "")
-    recipe = {"kind": kind, "x": x, "y": y, "z": z, "y_axis": y_axis, "component": component, "theme": theme, "slices": slices, "title": st.text_input("标题", value=recipe_title, key=f"plot_title_{rev}")}
+    recipe = copy.deepcopy(loaded_recipe)
+    recipe.update({"kind": kind, "x": x, "y": y, "z": z, "y_axis": y_axis, "component": component, "theme": theme, "slices": slices, "title": st.text_input("标题", value=recipe_title, key=f"plot_title_{rev}")})
+    with st.expander("字体与图表样式"):
+        st.caption("字体需在浏览器或导出环境中可用，可填写逗号分隔的回退字体。预览随窗口缩放，图宽/图高用于导出尺寸。")
+        presets = {"无衬线": "Arial", "衬线": "Times New Roman", "等宽": "Courier New", "自定义": "custom"}
+        family_loaded = str(loaded.get("font_family", "Arial"))
+        preset = st.selectbox("字体预设", list(presets), index=list(presets).index(_font_preset(family_loaded)), key=f"font_preset_{rev}", on_change=_set_font_preset, args=(st, f"font_preset_{rev}", f"font_family_{rev}"))
+        font_family = st.text_input("字体", value=loaded.get("font_family", presets[preset] if presets[preset] != "custom" else "Arial"), key=f"font_family_{rev}")
+        s1, s2, s3 = st.columns(3)
+        recipe["font_size"] = s1.number_input("字号", 6, 72, int(loaded.get("font_size", 14)), key=f"font_size_{rev}")
+        recipe["title_size"] = s2.number_input("标题字号", 6, 96, int(loaded.get("title_size", 20)), key=f"title_size_{rev}")
+        recipe["axis_title_size"] = s3.number_input("坐标标题字号", 6, 72, int(loaded.get("axis_title_size", 15)), key=f"axis_title_size_{rev}")
+        s1, s2, s3 = st.columns(3)
+        recipe["tick_size"] = s1.number_input("刻度字号", 6, 72, int(loaded.get("tick_size", 12)), key=f"tick_size_{rev}")
+        recipe["legend_size"] = s2.number_input("图例字号", 6, 72, int(loaded.get("legend_size", 12)), key=f"legend_size_{rev}")
+        recipe["line_width"] = s3.number_input("线宽", 0.1, 20.0, float(loaded.get("line_width", 2)), key=f"line_width_{rev}")
+        s1, s2, s3 = st.columns(3)
+        recipe["marker_size"] = s1.number_input("标记大小", 1, 50, int(loaded.get("marker_size", 7)), key=f"marker_size_{rev}")
+        recipe["line_dash"] = s2.selectbox("线型", ["solid", "dash", "dot", "dashdot"], index=["solid", "dash", "dot", "dashdot"].index(loaded.get("line_dash", "solid")) if loaded.get("line_dash", "solid") in {"solid", "dash", "dot", "dashdot"} else 0, key=f"line_dash_{rev}")
+        recipe["legend_position"] = s3.selectbox("图例位置", ["bottom", "right", "top"], index=["bottom", "right", "top"].index(loaded.get("legend_position", "bottom")), key=f"legend_position_{rev}")
+        s1, s2, s3 = st.columns(3)
+        recipe["show_grid"] = s1.checkbox("显示网格", value=bool(loaded.get("show_grid", True)), key=f"show_grid_{rev}")
+        recipe["show_legend"] = s2.checkbox("显示图例", value=bool(loaded.get("show_legend", True)), key=f"show_legend_{rev}")
+        recipe["colorscale"] = s3.text_input("颜色刻度", value=loaded.get("colorscale", "Viridis"), key=f"colorscale_{rev}")
+        recipe["width"] = st.number_input("图宽", 200, 3000, int(loaded.get("width", 0) or 900), key=f"plot_width_{rev}")
+        recipe["height"] = st.number_input("图高", 200, 3000, int(loaded.get("height", 500)), key=f"plot_height_{rev}")
+        recipe["font_family"] = font_family
+        recipe["colors"] = list(loaded.get("colors") or THEMES.get(theme, {}).get("colors", []))
+        _style_keys = ("font_family", "font_size", "title_size", "axis_title_size", "tick_size", "legend_size", "line_width", "marker_size", "line_dash", "show_grid", "show_legend", "legend_position", "colors", "colorscale")
+        recipe["style"] = {key: recipe.pop(key, _style_defaults(theme)[key]) for key in _style_keys}
+    if kind == "panels":
+        st.caption("多面板配方使用 panels 列表，每项是普通绘图配方；columns 支持 1–4。")
+        recipe["columns"] = st.number_input("面板列数", 1, 4, int(loaded.get("columns", 2)), key=f"panel_columns_{rev}")
+        recipe["panels"] = loaded.get("panels") if isinstance(loaded.get("panels"), list) else []
     try: recipe_names = catalog.list_recipes()
     except Exception: recipe_names = []
     with st.expander("保存 / 载入配方"):
-        chosen = st.selectbox("已保存配方", ["（当前配方）", *recipe_names]); c1, c2 = st.columns(2)
-        if c1.button("载入配方") and chosen != "（当前配方）":
-            incoming = catalog.load_recipe(chosen)
-            st.session_state["loaded_recipe"] = incoming
-            st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
-            st.rerun()
+        project_templates = st.session_state.get("project_templates")
+        project_names = sorted((project_templates.config.get("plots", {}) if project_templates else {}) or {})
+        template_options = ["（当前配方）", *recipe_names, *[f"project:{n}" for n in project_names]]
+        chosen = st.selectbox("已保存配方", template_options); c1, c2 = st.columns(2)
+        load_clicked = c1.button("载入配方")
+        apply_clicked = c1.button("应用模板")
+        if (load_clicked or apply_clicked) and chosen != "（当前配方）":
+            try:
+                if chosen.startswith("project:") and project_templates:
+                    incoming = project_templates.recipe(chosen.removeprefix("project:"))
+                else:
+                    incoming = catalog.load_recipe(chosen)
+                st.session_state["loaded_recipe"] = _validate_recipe_for_data(incoming, datasets, [r.get("title", r["run_id"]) for r in selected_runs])
+                st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
+                st.rerun()
+            except Exception as exc:
+                st.error(f"无法应用配方：{exc}；请检查变量名、面板和样式字段。")
         name = c2.text_input("配方名称", value="我的配方")
-        if c2.button("保存当前配方"): catalog.save_recipe(name, recipe); st.success("配方已保存。")
+        overwrite = c2.checkbox("允许覆盖项目配方", value=False)
+        save_clicked = c2.button("保存当前配方")
+        save_project_clicked = c2.button("保存到项目")
+        if save_clicked or save_project_clicked:
+            try:
+                if save_project_clicked and not project_templates:
+                    raise ValueError("请先选择包含 research-data.project.json 的模板项目目录")
+                if save_project_clicked:
+                    project_templates.save_plot(name, recipe, overwrite=overwrite)
+                else:
+                    catalog.save_recipe(name, recipe)
+                st.success("配方已保存。")
+            except Exception as exc:
+                st.error(f"保存配方失败：{exc}")
+    with st.expander("高级配方 JSON"):
+        advanced_default = json.dumps(recipe, ensure_ascii=False, indent=2)
+        advanced_text = st.text_area("JSON（支持 panels 与 layout）", value=advanced_default, key=f"advanced_recipe_{rev}")
+        if st.button("应用高级配方", key=f"apply_advanced_{rev}"):
+            try:
+                incoming = json.loads(advanced_text)
+                if not isinstance(incoming, dict): raise ValueError("配方必须是 JSON 对象")
+                if incoming.get("kind") == "panels":
+                    panels = incoming.get("panels")
+                    if not isinstance(panels, list) or not panels: raise ValueError("panels 必须是非空列表")
+                st.session_state["loaded_recipe"] = _validate_recipe_for_data(incoming, datasets, [r.get("title", r["run_id"]) for r in selected_runs])
+                st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
+                st.rerun()
+            except Exception as exc:
+                st.error(f"高级配方无效：{exc}；请提供 JSON 对象，并确保 panels 是非空列表。")
     if st.button("生成图表", type="primary"):
         try:
             from research_data.provenance import capture_provenance
             with tempfile.TemporaryDirectory() as td:
-                provenance = capture_provenance(Path(__file__).parent, td, entrypoint="app.py", source_paths=["app.py", "plotting.py"])
+                provenance = capture_provenance(Path(__file__).parent, td, entrypoint="app.py", source_paths=["app.py", "plotting.py", "project.py"])
                 source_archive = (Path(td) / provenance["snapshot"]["path"]).read_bytes()
             source_snapshot = provenance["snapshot"]["files"]
+            origin = _project_origin(recipe) or _project_origin(loaded)
+            if origin:
+                recipe["_project_template"] = origin
             fig = render_plot(datasets, recipe, labels=[r.get("title", r["run_id"]) for r in selected_runs])
-            st.session_state.update(figure=fig, figure_recipe=dict(recipe), figure_inputs=list(st.session_state.get("dataset_ids", [])), figure_source_snapshot=source_snapshot, figure_provenance=provenance, figure_archive=source_archive)
+            st.session_state.update(figure=fig, figure_recipe=copy.deepcopy(recipe), figure_inputs=list(st.session_state.get("dataset_ids", [])), figure_source_snapshot=source_snapshot, figure_provenance=provenance, figure_archive=source_archive, figure_generated=True)
             st.session_state.pop("static_download", None)
         except Exception as exc:
             for key in ("figure", "figure_inputs", "figure_recipe", "static_download"):
                 st.session_state.pop(key, None)
             st.error(f"绘图失败：{exc}")
     fig = st.session_state.get("figure")
+    if fig is not None and st.session_state.get("figure_generated"):
+        # Style and layout controls are live after the first explicit generation.
+        live_recipe = copy.deepcopy(recipe)
+        origin = _project_origin(live_recipe) or _project_origin(st.session_state.get("figure_recipe", {}))
+        if origin:
+            live_recipe["_project_template"] = origin
+        previous_recipe = st.session_state.get("figure_recipe", {})
+        try:
+            fig = render_plot(datasets, live_recipe, labels=[r.get("title", r["run_id"]) for r in selected_runs])
+            st.session_state["figure"] = fig
+            st.session_state["figure_recipe"] = copy.deepcopy(live_recipe)
+            if live_recipe != previous_recipe:
+                st.session_state.pop("static_download", None)
+        except Exception as exc:
+            st.warning(f"实时预览暂不可用：{exc}；显示上一张有效配方的图表。")
     if fig is not None:
-        frozen = st.session_state.get("figure_recipe", {}); st.plotly_chart(fig, use_container_width=True, theme=None)
+        frozen = copy.deepcopy(st.session_state.get("figure_recipe", {})); st.plotly_chart(fig, use_container_width=True, theme=None)
         st.download_button("下载 HTML", fig.to_html(include_plotlyjs="cdn"), file_name="figure.html", mime="text/html")
         out, reg = st.columns(2); fmt = out.selectbox("导出格式", ["png", "svg", "pdf"])
         if out.button("导出静态图"):
@@ -218,6 +402,8 @@ def main(root: str | None = None) -> None:
                     source_snapshot = st.session_state.get("figure_source_snapshot", [])
                     versions = {"package": getattr(research_data, "__version__", "unknown"), "plotly": plotly.__version__}
                     parameters = {"recipe": frozen, "inputs": inputs, "render_version": fig.layout.meta.get("render_version", "1"), "versions": versions, "source_snapshot": source_snapshot}
+                    if frozen.get("_project_template"):
+                        parameters["project_template"] = copy.deepcopy(frozen["_project_template"])
                     analysis = catalog.start_run("分析图：" + str(frozen.get("title") or run.get("title", "")), project=run.get("project", "default"), kind="analysis", parent_run_ids=[i["run_id"] for i in inputs], parameters=parameters)
                     catalog.attach_provenance(analysis.run_id, st.session_state["figure_provenance"], st.session_state["figure_archive"])
                     analysis.add_artifact(path, role="figure", metadata=parameters); analysis.add_artifact(recipe_path, role="recipe", metadata={"recipe": frozen}); analysis.finish(); reg.success("分析图已登记并关联输入运行。")

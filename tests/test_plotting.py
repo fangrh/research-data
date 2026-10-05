@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from research_data.plotting import THEMES, export_plot, render_plot
+from research_data.plotting import THEMES, export_plot, render_plot, validate_recipe
 
 
 @pytest.fixture
@@ -68,3 +68,93 @@ def test_static_runtime_error_is_actionable(tmp_path, dataset, monkeypatch):
     fig = render_plot([dataset], {"kind": "line", "x": "time", "y": "current"})
     with pytest.raises(RuntimeError, match="configure --browser"):
         export_plot(fig, tmp_path / "figure.png")
+
+
+def test_style_changes_appearance_without_changing_values(dataset):
+    recipe = {"kind": "line", "x": "time", "y": "current", "component": "imag",
+              "style": {"font_family": "DejaVu Sans", "line_width": 4, "marker_size": 10,
+                        "show_grid": False, "legend_position": "right", "colors": ["#abc123"]}}
+    fig = render_plot([dataset], recipe)
+    assert list(fig.data[0].y) == [2.0, 0.0, -1.0]
+    assert fig.data[0].line.width == 4
+    assert fig.data[0].line.color == "#abc123"
+    assert fig.layout.font.family == "DejaVu Sans" and fig.layout.xaxis.showgrid is False
+    with pytest.raises(ValueError, match="Unknown style key"):
+        render_plot([dataset], {"x": "time", "y": "current", "style": {"bogus": 1}})
+    with pytest.raises(ValueError, match="finite"):
+        render_plot([dataset], {"x": "time", "y": "current", "style": {"line_width": np.nan}})
+    with pytest.raises(ValueError, match="scientific axis"):
+        render_plot([dataset], {"x": "time", "y": "current", "layout": {"xaxis": {"range": [0, 1]}}})
+
+
+def test_panels_preserve_components_units_and_source_order(dataset):
+    dataset["time"].attrs["units"] = "s"
+    dataset["bias"].attrs["units"] = "V"
+    recipe = {"kind": "panels", "columns": 2, "theme": "midnight", "title": "Overview", "style": {"font_size": 25, "title_size": 28},
+              "layout": {"paper_bgcolor": "#123456"},
+              "panels": [
+                  {"kind": "line", "x": "time", "y": "current", "component": "real", "title": "real", "dataset_indices": [0], "style": {"tick_size": 17}},
+                  {"kind": "line", "x": "time", "y": "current", "component": "imag", "title": "imag", "dataset_indices": [0]},
+                  {"kind": "heatmap", "x": "bias", "z": "signal", "title": "map", "dataset_indices": [0]},
+              ]}
+    fig = render_plot([dataset], recipe)
+    assert list(fig.data[0].y) == [1.0, 2.0, 3.0]
+    assert list(fig.data[1].y) == [2.0, 0.0, -1.0]
+    assert np.asarray(fig.data[2].z).shape == (3, 4)
+    assert fig.layout.xaxis.title.text == "time (s)"
+    assert fig.layout.yaxis.title.text == "current"
+    assert fig.layout.meta["recipe"] == recipe
+    assert fig.layout.template.layout.plot_bgcolor is not None
+    assert fig.layout.paper_bgcolor == "#123456"
+    assert fig.layout.font.size == 25 and fig.layout.title.font.size == 28
+    assert fig.layout.xaxis.tickfont.size == 17
+    assert fig.layout.xaxis.tickfont.family == "Arial"
+    assert fig.data[0].showlegend is True
+    assert fig.data[2].colorbar.title.text == "signal"
+
+
+def test_panel_legend_and_dashed_style(dataset):
+    recipe = {"kind": "panels", "columns": 2, "theme": "paper_dashed", "style": {"font_family": "Courier New"},
+              "panels": [{"kind": "line", "x": "time", "y": ["current", "current"], "style": {"show_legend": False}}]}
+    fig = render_plot([dataset], recipe)
+    assert fig.data[0].showlegend is False
+    assert fig.data[0].line.dash == "solid" and fig.data[1].line.dash == "dash"
+    assert fig.layout.xaxis.tickfont.family == "Courier New"
+
+
+def test_validate_recipe_is_structural_only(dataset):
+    assert validate_recipe({"kind": "line", "x": "time", "y": "current"})["x"] == "time"
+    with pytest.raises(ValueError, match="Nested panels"):
+        validate_recipe({"kind": "panels", "panels": [{"kind": "panels", "panels": [{"x": "time", "y": "current"}]}]})
+    with pytest.raises(ValueError, match="columns"):
+        validate_recipe({"kind": "panels", "columns": 5, "panels": [{"x": "time", "y": "current"}]})
+
+
+def test_embedded_theme_colors_and_custom_layout_are_explicit(dataset):
+    recipe = {"kind": "line", "x": "time", "y": "current", "theme": "midnight"}
+    dark = render_plot([dataset], recipe)
+    assert dark.layout.paper_bgcolor == "rgb(17,17,17)"
+    assert dark.layout.plot_bgcolor == "rgb(17,17,17)"
+    assert dark.layout.font.color == "#f2f5fa"
+    assert dark.layout.xaxis.tickfont.color == "#f2f5fa"
+    custom = render_plot([dataset], {**recipe, "layout": {"paper_bgcolor": "white", "font": {"color": "black"}}})
+    assert custom.layout.paper_bgcolor == "white" and custom.layout.font.color == "black"
+    assert custom.layout.xaxis.tickfont.color == "black"
+    assert list(dark.data[0].y) == list(custom.data[0].y)
+    panels = render_plot([dataset], {"kind": "panels", "theme": "midnight", "panels": [recipe, recipe]})
+    assert panels.layout.paper_bgcolor == dark.layout.paper_bgcolor
+    assert panels.layout.xaxis2.tickfont.color == "#f2f5fa"
+
+
+def test_heatmap_colorbars_retain_units_and_each_panel_domain(dataset):
+    dataset["signal"].attrs["units"] = "A"
+    recipe = {"kind": "panels", "columns": 1, "panels": [
+        {"kind": "heatmap", "x": "bias", "z": "signal"},
+        {"kind": "heatmap", "x": "bias", "z": "signal", "component": "phase"},
+    ]}
+    fig = render_plot([dataset], recipe)
+    assert fig.data[0].colorbar.title.text == "signal (A)"
+    assert fig.data[1].colorbar.title.text == "signal (rad)"
+    assert fig.data[0].colorbar.y > fig.data[1].colorbar.y
+    assert fig.data[0].colorbar.x > fig.layout.xaxis.domain[1]
+    assert list(fig.data[0].z[1]) == [4, 5, 6, 7]

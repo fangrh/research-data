@@ -1,5 +1,11 @@
 # ResearchData
 
+直接在界面选择九种风格、字体/字号、线宽、网格和图例，并保存可复用配方。
+在科学项目中运行 `research-data project init`，将数据映射与多面板绘图结构保存为
+`research-data.project.json`。`research-data open --project-dir PATH` 打开对应模板。
+用户和 agent 使用同一套配置，模板和输入数据分别保留源码/Git 来源。
+详见 [项目模板与可视化编辑](docs/PROJECT_TEMPLATES.md)。
+
 实验与计算共用的本地科研数据管理软件：**数据 → 描述与分类 → 生成时的源码/Git → 可复用绘图 → 图的输入与配方**。
 
 这是**本地 Web 应用**，浏览器负责查看与绘图，数据保存在你的电脑。Windows

@@ -24,6 +24,18 @@ invent command options. Human users can omit `--json`; `research-data open`
 starts the managed local browser service, while `serve` remains the foreground
 option and `browse` remains a compatibility alias. See [workflow guidance](references/workflow.md).
 
+## Project-local data and plot structures
+
+Before inventing another data/plot wrapper, inspect the scientific project's
+research-data.project.json. Use project init/show/check and guide customize
+--json. Profiles declare names, units and dimensions; plots declare styles and
+single/multiple panels. Use --profile project:NAME or --recipe project:NAME with
+--project-dir SOURCE_ROOT. Commit the project JSON alongside the source code.
+Resolved templates freeze their exact file content, hash and Git identity.
+Keep the template version distinct from the input data's generating source.
+The browser supports live font/style editing and saving project templates.
+See [project templates](references/project-templates.md).
+
 ## Generate data
 
 Start the record before executing code so the commit, branch, source bytes and parameters describe the run that produces the data. The command wrapper works with Julia, Python and other existing computational stacks:

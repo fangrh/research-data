@@ -78,6 +78,7 @@ def parser():
     opener.add_argument("--port", type=int, default=8765, help="Preferred port; automatically chooses a nearby free port")
     opener.add_argument("--no-open", action="store_true", help="Start the service without opening a browser")
     opener.add_argument("--timeout", type=float, default=45, help="Startup readiness timeout in seconds")
+    opener.add_argument("--project-dir", help="Select this project's templates in the opened browser")
     command("status", "Show the managed service for the selected catalog (JSON)")
     command("stop", "Stop only this catalog's managed service; retain all data")
     command("init", "Create a catalog without modifying source data")
@@ -86,6 +87,7 @@ def parser():
     run = command("run", "Wrap any Python/Julia/other command and register generated outputs")
     _run_options(run)
     run.add_argument("--profile", help="Import mapping JSON, file, or saved profile name for generated data")
+    run.add_argument("--project-dir", help="Directory containing research-data.project.json for project:NAME profiles")
     run.add_argument("command", nargs=argparse.REMAINDER, help="Command after --; write outputs into RESEARCH_DATA_OUTPUT")
     register = command("register", "Copy and describe a file under an existing run")
     register.add_argument("run_id")
@@ -93,11 +95,13 @@ def parser():
     register.add_argument("--role", default="raw")
     register.add_argument("--description", default="")
     register.add_argument("--profile", help="Import mapping as JSON or JSON file")
+    register.add_argument("--project-dir", help="Directory for a project:NAME import profile")
     register.add_argument("--metadata", help="Additional artifact metadata as JSON or file")
     imp = command("import", "Register historical data with explicitly unknown source identity")
     _run_options(imp)
     imp.add_argument("path")
     imp.add_argument("--profile")
+    imp.add_argument("--project-dir", help="Directory for a project:NAME import profile")
     finish = command("finish", "Record execution outcome independently of scientific validation")
     finish.add_argument("run_id")
     finish.add_argument("--status", choices=["completed", "failed", "imported"], default="completed")
@@ -117,7 +121,8 @@ def parser():
     validate.add_argument("--notes", default="")
     plot = command("plot", "Apply a reusable recipe to one or multiple registered datasets")
     plot.add_argument("run_ids", nargs="+")
-    plot.add_argument("--recipe", required=True, help="Saved recipe name, JSON object or JSON file")
+    plot.add_argument("--recipe", required=True, help="Saved recipe, JSON/file, or project:NAME template")
+    plot.add_argument("--project-dir", help="Directory for a project:NAME plotting template")
     plot.add_argument("--artifact", action="append", help="Artifact ID for each selected run")
     plot.add_argument("--output", default="figure.html")
     plot.add_argument("--title")
@@ -125,6 +130,12 @@ def parser():
     profile.add_argument("name")
     profile.add_argument("json", help="Mapping JSON or JSON file")
     command("themes", "List selectable plot styles")
+    project = command("project", "Initialize, inspect, validate or save Git-trackable project templates")
+    project.add_argument("operation", choices=["init", "show", "check", "save-plot"], nargs="?", default="show")
+    project.add_argument("--project-dir", help="Project directory (default: RESEARCH_DATA_PROJECT or cwd)")
+    project.add_argument("--name", help="Plot template name for save-plot")
+    project.add_argument("--recipe", help="Plot recipe JSON or file for save-plot")
+    project.add_argument("--overwrite", action="store_true", help="Explicitly replace an existing plot template")
     for name in ("serve", "browse"):
         service = command(name, "Run the local Web service in this terminal (Ctrl+C to stop)" + ("; legacy alias of serve" if name == "browse" else ""))
         service.add_argument("--port", type=int, default=8765, help="Exact localhost port")
@@ -151,9 +162,12 @@ def _options(args, imported=False):
                 entrypoint=args.entrypoint, source_paths=args.source)
 
 
-def _profile(cat, value):
+def _profile(cat, value, project_dir=None):
     if value is None:
         return None
+    if value.startswith("project:"):
+        from .project import resolve_project
+        return resolve_project(value, project_dir, "profiles")
     return _json(value) if value.lstrip().startswith("{") or Path(value).is_file() else cat.load_recipe("import-" + value)
 
 
@@ -165,6 +179,10 @@ def _wrap(cat, args):
         raise ValueError("run requires an executable command after --")
     options = _options(args)
     options["command"] = command
+    # Freeze the import mapping before running the producer, not after it exits.
+    profile = _profile(cat, args.profile, args.project_dir)
+    if profile:
+        options["parameters"]["import_profile"] = profile
     run = cat.start_run(**options)
     output_dir = run.path / "output"
     output_dir.mkdir()
@@ -175,7 +193,7 @@ def _wrap(cat, args):
             process = subprocess.run(command, env=env, stdout=stdout, stderr=stderr)
         for path in sorted(output_dir.rglob("*")):
             if path.is_file():
-                run.add_artifact(path, profile=_profile(cat, args.profile), description="Generated output; variable meanings/units follow the declared import profile.")
+                run.add_artifact(path, profile=profile, description="Generated output; variable meanings/units follow the declared import profile.")
         for name in ("stdout.log", "stderr.log"):
             run.add_artifact(run.path / name, role="log", description=name)
         run.finish("completed" if process.returncode == 0 else "failed", error=None if process.returncode == 0 else f"Command exited with {process.returncode}")
@@ -189,7 +207,11 @@ def _wrap(cat, args):
 def _plot(cat, args):
     from . import __version__
     from .plotting import export_plot, render_plot
-    recipe = _json(args.recipe) if args.recipe.lstrip().startswith("{") or Path(args.recipe).is_file() else cat.load_recipe(args.recipe)
+    if args.recipe.startswith("project:"):
+        from .project import resolve_project
+        recipe = resolve_project(args.recipe, args.project_dir, "plots")
+    else:
+        recipe = _json(args.recipe) if args.recipe.lstrip().startswith("{") or Path(args.recipe).is_file() else cat.load_recipe(args.recipe)
     datasets, labels, inputs = [], [], []
     if args.artifact and len(args.artifact) != len(args.run_ids):
         raise ValueError("Provide one --artifact ID per selected run")
@@ -204,7 +226,7 @@ def _plot(cat, args):
         raise ValueError(f"Output already exists: {destination}; choose a new output filename")
     analysis = cat.start_run(title=args.title or recipe.get("title") or "Figure", project=cat.get(args.run_ids[0])["project"], kind="analysis",
                              description="Reusable plot generated from registered input datasets.", parent_run_ids=args.run_ids,
-                             repo=str(Path(__file__).resolve().parent), entrypoint="plotting.py", source_paths=["plotting.py", "cli.py"],
+                             repo=str(Path(__file__).resolve().parent), entrypoint="plotting.py", source_paths=["plotting.py", "cli.py", "project.py"],
                              parameters={"plot_recipe": recipe, "inputs": inputs, "research_data_version": __version__, "plotly_version": importlib.metadata.version("plotly")})
     try:
         figure = render_plot(datasets, recipe, labels=labels)
@@ -239,7 +261,13 @@ def main(argv=None):
             if args.action in ("serve", "browse"):
                 return server.serve(args.root, args.port, args.no_open)
             if args.action == "open":
-                _emit(server.open_catalog(args.root, args.port, args.no_open, args.timeout))
+                result = server.open_catalog(args.root, args.port, args.no_open or bool(args.project_dir), args.timeout)
+                if args.project_dir:
+                    from urllib.parse import urlencode
+                    import webbrowser
+                    result["url"] += "?" + urlencode({"project_dir": str(Path(args.project_dir).expanduser().resolve())})
+                    result["browser_opened"] = bool(webbrowser.open(result["url"])) if not args.no_open else False
+                _emit(result)
             elif args.action == "status":
                 _emit(server.status(args.root))
             else:
@@ -257,6 +285,26 @@ def main(argv=None):
             from .agent import configure
             _emit(configure(args.browser))
             return 0
+        if args.action == "project":
+            from .project import ProjectTemplates
+            directory = args.project_dir or os.environ.get("RESEARCH_DATA_PROJECT") or Path.cwd()
+            if args.operation == "init":
+                _emit({"project_file": str(ProjectTemplates.initialize(directory))})
+                return 0
+            templates = ProjectTemplates(directory)
+            if args.operation in ("check", "save-plot"):
+                from .plotting import validate_recipe
+                if args.operation == "check":
+                    for recipe in templates.config.get("plots", {}).values():
+                        validate_recipe(recipe)
+                else:
+                    if not args.name or not args.recipe:
+                        raise ValueError("project save-plot requires --name and --recipe")
+                    recipe = _json(args.recipe)
+                    validate_recipe(recipe)
+                    templates.save_plot(args.name, recipe, overwrite=args.overwrite)
+            _emit({"ok": True, **templates.summary(), "configuration": templates.config})
+            return 0
         from .catalog import Catalog
         cat = Catalog(args.root)
         if args.action == "init":
@@ -266,12 +314,12 @@ def main(argv=None):
         elif args.action == "run":
             return _wrap(cat, args)
         elif args.action == "register":
-            profile = _profile(cat, args.profile)
+            profile = _profile(cat, args.profile, args.project_dir)
             _emit(cat.register_artifact(args.run_id, args.path, role=args.role, description=args.description, profile=profile, metadata=_json(args.metadata, {})))
         elif args.action == "import":
             run = cat.start_run(**_options(args, imported=True))
             try:
-                run.add_artifact(args.path, description=args.description, profile=_profile(cat, args.profile))
+                run.add_artifact(args.path, description=args.description, profile=_profile(cat, args.profile, args.project_dir))
                 run.finish("imported")
             except Exception as exc:
                 run.finish("failed", error=str(exc))
@@ -308,7 +356,7 @@ def main(argv=None):
             from .demo import build_demo
             _emit(build_demo(cat, with_qcodes=args.with_qcodes))
         return 0
-    except (ValueError, OSError, KeyError, ImportError, RuntimeError) as exc:
+    except (ValueError, TypeError, IndexError, OSError, KeyError, ImportError, RuntimeError) as exc:
         print(json.dumps({"error": str(exc), "type": type(exc).__name__}, ensure_ascii=False), file=sys.stderr)
         return 2
 

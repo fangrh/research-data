@@ -1,0 +1,48 @@
+{
+  "schema": "research-data.project.v1",
+  "description": "Project-local templates. Replace x/y and declare known units before use.",
+  "profiles": {
+    "transport": {
+      "x": "bias",
+      "rename": {
+        "raw_current": "current"
+      },
+      "units": {
+        "bias": "V",
+        "current": "A"
+      },
+      "descriptions": {
+        "current": "Complex current response; illustrative mapping"
+      }
+    }
+  },
+  "plots": {
+    "response": {
+      "kind": "panels",
+      "columns": 2,
+      "theme": "paper",
+      "title": "Real and imaginary components",
+      "height": 520,
+      "panels": [
+        {
+          "kind": "line",
+          "x": "bias",
+          "y": "current",
+          "component": "real",
+          "title": "Real"
+        },
+        {
+          "kind": "line",
+          "x": "bias",
+          "y": "current",
+          "component": "imag",
+          "title": "Imaginary"
+        }
+      ],
+      "style": {
+        "font_family": "Times New Roman, serif",
+        "font_size": 16
+      }
+    }
+  }
+}

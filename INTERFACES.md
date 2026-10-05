@@ -1,5 +1,19 @@
 # Shared implementation contract
 
+## Project templates and presentation (v0.2)
+
+`ProjectTemplates(directory)` reads inert research-data.project.json (schema
+research-data.project.v1). `.profile(name)` / `.recipe(name)` return detached
+definitions with exact file text/hash/Git identity. `.save_plot(name, recipe,
+overwrite=False)` validates and preserves existing definitions by default;
+`initialize(directory)` refuses overwrite. `project:NAME` references work from
+run/import/register/plot with --project-dir, and the browser uses the same file.
+`validate_recipe(recipe)` checks structure without claiming data compatibility.
+Plot recipes add `style`, safe `layout`, and `kind=panels` with independent
+ordinary panels, columns1..4, at most12 panels and per-panel dataset_indices.
+Live UI styling updates the displayed recipe and invalidates stale exports.
+See docs/PROJECT_TEMPLATES.md for the supported keys and replay boundary.
+
 This is the approved product scope and the controller/worker interface contract.
 Python handles storage, adapters and visualization; scientific numerical solvers remain in their original stack.
 
