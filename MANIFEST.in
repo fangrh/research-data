@@ -1,4 +1,4 @@
-include LICENSE README.md INTERFACES.md Start-ResearchData.ps1
+include LICENSE README.md INTERFACES.md Start-ResearchData.ps1 Start-ResearchData.cmd research-data.cmd
 recursive-include examples *.py *.jl *.json
 recursive-include scripts *.ps1
 recursive-include docs *.md *.png

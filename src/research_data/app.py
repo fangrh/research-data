@@ -62,6 +62,13 @@ def main(root: str | None = None) -> None:
     with st.sidebar:
         st.text_input("Catalog 根目录", value=str(root), key="catalog_root")
         root = st.session_state.catalog_root
+        with st.expander("使用帮助 / Help"):
+            st.markdown("这是本地 Web 应用，数据保存在所选 Catalog。\n\n"
+                        "**生成新数据：** 用 `run` 包装计算或实验脚本。\n\n"
+                        "**导入旧数据：** 用 `import` 和可复用的 `profile`。\n\n"
+                        "**定位与绘图：** 用 `search` / `show` 查来源，用 `plot` 套用配方；也可直接操作此界面。")
+            st.code("research-data help\nresearch-data help run\nresearch-data guide plot\nresearch-data help --json", language="text")
+            st.caption("Windows 可双击 Start-ResearchData.cmd 或桌面快捷方式。关闭网页后后台服务仍运行；用 research-data stop 停止。")
     if st.session_state.get("catalog_root_state") != root:
         st.session_state["catalog_root_state"] = root
         st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1

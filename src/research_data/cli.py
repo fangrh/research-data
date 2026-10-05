@@ -58,15 +58,28 @@ def _run_options(parser):
 
 def parser():
     from . import __version__
-    p = argparse.ArgumentParser(prog="research-data", description="Scientific data catalog, exact source provenance and reusable plotting")
+    p = argparse.ArgumentParser(prog="research-data", description="Local scientific data browser, exact source provenance and reusable plotting",
+                                epilog="Quick start: research-data open | research-data help | research-data guide agent | research-data help run")
     p.add_argument("--version", action="version", version=__version__)
     from .agent import default_catalog
     p.add_argument("--root", default=default_catalog(), help="Catalog folder (or RESEARCH_DATA_CATALOG / installed default)")
-    subs = p.add_subparsers(dest="action", required=True)
+    subs = p.add_subparsers(dest="action")
     def command(name, help):
-        child = subs.add_parser(name, help=help)
-        child.add_argument("--root", default=argparse.SUPPRESS)
+        child = subs.add_parser(name, help=help, description=help)
+        child.add_argument("--root", default=argparse.SUPPRESS, help="Catalog folder; overrides the shared default")
         return child
+    help_command = command("help", "Discover commands, their options and examples")
+    help_command.add_argument("topic", nargs="?", help="Command name; omit for grouped command overview")
+    help_command.add_argument("--json", action="store_true", help="Machine-readable command and option catalog")
+    guide = command("guide", "Choose a workflow: browse, generate, import, plot or agent")
+    guide.add_argument("topic", nargs="?", help="Workflow name; omit to list workflows")
+    guide.add_argument("--json", action="store_true", help="Machine-readable workflow steps and selection rules")
+    opener = command("open", "Start or reuse a managed local Web service and open your browser")
+    opener.add_argument("--port", type=int, default=8765, help="Preferred port; automatically chooses a nearby free port")
+    opener.add_argument("--no-open", action="store_true", help="Start the service without opening a browser")
+    opener.add_argument("--timeout", type=float, default=45, help="Startup readiness timeout in seconds")
+    command("status", "Show the managed service for the selected catalog (JSON)")
+    command("stop", "Stop only this catalog's managed service; retain all data")
     command("init", "Create a catalog without modifying source data")
     start = command("start", "Capture source and begin a run before data generation")
     _run_options(start)
@@ -112,9 +125,10 @@ def parser():
     profile.add_argument("name")
     profile.add_argument("json", help="Mapping JSON or JSON file")
     command("themes", "List selectable plot styles")
-    serve = command("browse", "Open the clickable data catalog and plot studio")
-    serve.add_argument("--port", type=int, default=8765)
-    serve.add_argument("--no-open", action="store_true")
+    for name in ("serve", "browse"):
+        service = command(name, "Run the local Web service in this terminal (Ctrl+C to stop)" + ("; legacy alias of serve" if name == "browse" else ""))
+        service.add_argument("--port", type=int, default=8765, help="Exact localhost port")
+        service.add_argument("--no-open", action="store_true", help="Do not open a browser")
     demo = command("demo", "Generate a labeled cross-format demonstration catalog")
     demo.add_argument("--with-qcodes", action="store_true")
     command("doctor", "Inspect installed optional dependencies and runtime")
@@ -207,8 +221,30 @@ def _plot(cat, args):
 
 
 def main(argv=None):
-    args = parser().parse_args(argv)
+    command_parser = parser()
+    args = command_parser.parse_args(argv)
     try:
+        if args.action in (None, "help", "guide"):
+            from .help import command_catalog, render_help, workflow_guide
+            topic = getattr(args, "topic", None)
+            machine = getattr(args, "json", False)
+            if args.action == "guide":
+                result = workflow_guide(topic, machine=machine)
+            else:
+                result = command_catalog(command_parser, topic) if machine else render_help(command_parser, topic)
+            _emit(result) if machine else print(result)
+            return 0
+        if args.action in ("open", "status", "stop", "serve", "browse"):
+            from . import server
+            if args.action in ("serve", "browse"):
+                return server.serve(args.root, args.port, args.no_open)
+            if args.action == "open":
+                _emit(server.open_catalog(args.root, args.port, args.no_open, args.timeout))
+            elif args.action == "status":
+                _emit(server.status(args.root))
+            else:
+                _emit(server.stop(args.root))
+            return 0
         if args.action == "doctor":
             from .provenance import environment_info
             _emit(environment_info())
@@ -221,10 +257,6 @@ def main(argv=None):
             from .agent import configure
             _emit(configure(args.browser))
             return 0
-        if args.action == "browse":
-            app = Path(__file__).with_name("app.py")
-            return subprocess.call([sys.executable, "-m", "streamlit", "run", str(app), "--server.address", "127.0.0.1", "--server.port", str(args.port),
-                                    "--server.headless", "true" if args.no_open else "false", "--browser.gatherUsageStats", "false", "--", str(Path(args.root).resolve())])
         from .catalog import Catalog
         cat = Catalog(args.root)
         if args.action == "init":

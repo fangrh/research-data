@@ -9,6 +9,21 @@ Use the installed Research Data package as the default registration layer when p
 
 The launcher is `python <this-skill>/scripts/research_data.py`. It selects the installed package runtime and shared catalog. Pass `--root PATH` when the user selects another catalog. Run `doctor` and `--help` to verify availability; missing software is a setup prerequisite, not permission to silently create an unregistered parallel data store.
 
+## Discover before choosing a command
+
+Use the installed parser and workflow map first:
+
+```text
+research-data help --json
+research-data guide --json
+research-data guide generate --json
+```
+
+The catalog reports actual flags and required arguments, so agents should not
+invent command options. Human users can omit `--json`; `research-data open`
+starts the managed local browser service, while `serve` remains the foreground
+option and `browse` remains a compatibility alias. See [workflow guidance](references/workflow.md).
+
 ## Generate data
 
 Start the record before executing code so the commit, branch, source bytes and parameters describe the run that produces the data. The command wrapper works with Julia, Python and other existing computational stacks:

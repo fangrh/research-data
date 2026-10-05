@@ -2,6 +2,10 @@
 
 实验与计算共用的本地科研数据管理软件：**数据 → 描述与分类 → 生成时的源码/Git → 可复用绘图 → 图的输入与配方**。
 
+这是**本地 Web 应用**，浏览器负责查看与绘图，数据保存在你的电脑。Windows
+双击 `Start-ResearchData.cmd` 即可安装并打开；环境准备好后，CMD 一行
+`research-data.cmd open` 即可打开，重复执行会复用同一数据目录的后台服务。
+
 ResearchData 借鉴 QCoDeS 的实验/run、参数、数据集与来源记录方式，并使用 QCoDeS 官方接口读取真实数据集。它是独立实现的目录和绘图层；仪器采集仍可交给 QCoDeS，计算仍使用你已有的 Python、Julia 或其他程序。
 
 ![ResearchData browser](docs/browser.png)
@@ -27,16 +31,37 @@ cd research-data
 python -m venv .venv
 .venv/Scripts/python -m pip install -e ".[ui,formats,export]"
 .venv/Scripts/python -m research_data --root demo-catalog demo --with-qcodes
-.venv/Scripts/python -m research_data --root demo-catalog browse
+.venv/Scripts/python -m research_data --root demo-catalog open
 ```
 
-Windows 也可运行 `./scripts/setup.ps1 -Agent -Catalog D:/research-data-library`，然后运行 `./Start-ResearchData.ps1`。浏览入口是 **http://127.0.0.1:8765**。示例均为标明的合成数据。
+Windows 也可运行 `./scripts/setup.ps1 -Agent -Catalog D:/research-data-library`，然后双击 `Start-ResearchData.cmd`。默认优先使用 **http://127.0.0.1:8765/**，被占用时自动选择附近空闲端口；以启动输出的 `url` 为准。示例均为标明的合成数据。
 
 普通包安装：`python -m pip install "research-data[ui,formats,export] @ git+https://github.com/fangrh/research-data.git"`。
 
 `ui` 安装网页界面，`formats` 安装 Parquet/QCoDeS，`export` 安装静态图导出。PNG/SVG/PDF 还需要 Chrome/Chromium；缺少时显示具体错误，HTML 可直接使用。HTML 使用 Plotly CDN，离线查看可用 Plotly 本地 bundle。
 
 已有 Chromium 时用 `research-data configure --browser PATH/TO/chrome.exe` 指定；也可用 `python -c "import kaleido; kaleido.get_chrome_sync()"` 安装 Kaleido 的 Chrome。配置保存在用户目录，不写入软件仓库。
+
+### 命令发现与一键启动
+
+安装后可用 `research-data help` 查看当前命令。`research-data help COMMAND --json`
+输出由实际 argparse parser 生成的选项、必填参数、默认值和示例，适合脚本与
+coding agent；`research-data guide WORKFLOW --json` 输出 `generate`、`import`、
+`plot`、`browse` 或 `agent` 的工作流决策图。人类可省略 `--json` 获得可读说明。
+
+```text
+research-data.cmd open
+research-data status
+research-data help run --json
+research-data guide generate
+```
+
+`open` 启动托管的本机服务并打开浏览器；`serve` 在前台运行并支持 Ctrl+C，
+`browse` 保留为兼容别名。Windows 可直接运行 `Start-ResearchData.cmd`（首次
+运行会准备环境），或在源码 checkout 中运行 `research-data.cmd open`；安装后的
+console entrypoint 仍是 `research-data open`。需要桌面快捷方式时可运行
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\desktop-shortcut.ps1`。
+详见 [docs/USAGE.md](docs/USAGE.md)。
 
 ## 让 agent 默认使用
 

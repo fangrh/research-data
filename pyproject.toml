@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-data"
-version = "0.1.0"
+version = "0.1.1"
 description = "Agent-first scientific data catalog, source provenance and reusable plotting"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -20,6 +20,9 @@ test = ["pytest>=8,<10", "build>=1", "streamlit>=1.40,<2", "pyarrow>=16", "qcode
 
 [project.scripts]
 research-data = "research_data.cli:main"
+
+[tool.setuptools]
+include-package-data = false
 
 [tool.setuptools.packages.find]
 where = ["src"]

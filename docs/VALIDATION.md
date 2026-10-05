@@ -1,3 +1,25 @@
+# 0.1.1 启动与帮助验证
+
+2026-10-05，Windows / Python 3.13.12。
+
+| 验证 | 结果 |
+|---|---|
+| 完整回归测试 | 41 passed；已有 NetCDF/NumPy ABI warning 保留，值/坐标断言通过 |
+| 本地服务 | 真正启动、就绪校验、同目录复用、端口占用回退、停止、错误认证拒绝 |
+| 并发启动 | 两个目录的三次同时 open 得到两个不同服务；同目录两次请求复用一个进程 |
+| 服务身份 | 校验本次启动独有的 UI 标识；错误标识不算就绪；随机 token 以短横线开头也能启动 |
+| Windows 入口 | 从另一工作目录执行 CMD；Start-ResearchData.cmd 自动打开默认浏览器；桌面快捷方式已创建并核查目标 |
+| 帮助 | 25 个命令；分组 help、逐命令参数/例子、5 类 workflow、JSON 必填参数/默认值/choices；错误 topic 返回 2，帮助不创建 catalog |
+| 独立 wheel | 从独立 site-packages 导入 0.1.1；CLI/已安装 skill discovery、owned UI readiness、启动/复用/停止通过 |
+| 实际页面 | 默认 Catalog 与侧栏 Help 已在浏览器打开；截图见 launch-help.png |
+
+Windows 双击入口随 Git checkout/source archive 提供；wheel 提供跨平台
+`research-data open` console 命令。全局和项目内的 agent skill 已刷新。
+当前本机共享目录为空，未放入示例数据；原有示例服务保留。
+以上均是软件行为验证。GitHub Actions 的 Windows/Linux 结果以线上记录为准。
+
+![Local browser help](launch-help.png)
+
 # 0.1.0 软件验证
 
 2026-10-05，Windows / Python 3.13.12。使用合成数据，验证范围是软件行为。
