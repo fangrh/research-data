@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.research-data/
+demo-catalog/
+catalog.sqlite3
+runs/
+recipes/
+demo-catalog-*/
+.artifacts/
+.wheel-venv/

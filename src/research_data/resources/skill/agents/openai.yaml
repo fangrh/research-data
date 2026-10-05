@@ -1,0 +1,6 @@
+interface:
+  display_name: "Research Data"
+  short_description: "Register scientific data, source versions and reusable plots"
+  default_prompt: "Use $research-data to generate and catalog scientific data with source provenance and reusable plotting."
+policy:
+  allow_implicit_invocation: true

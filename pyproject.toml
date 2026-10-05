@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "research-data"
+version = "0.1.0"
+description = "Agent-first scientific data catalog, source provenance and reusable plotting"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["numpy>=1.24,<3", "pandas>=2,<4", "xarray>=2024.1", "plotly>=6,<7", "h5py>=3.10,<4", "scipy>=1.11,<2"]
+
+[project.optional-dependencies]
+ui = ["streamlit>=1.40,<2"]
+formats = ["pyarrow>=16", "qcodes>=0.55,<1"]
+export = ["kaleido>=1,<2"]
+test = ["pytest>=8,<10", "build>=1", "streamlit>=1.40,<2", "pyarrow>=16", "qcodes>=0.55,<1", "kaleido>=1,<2"]
+
+[project.scripts]
+research-data = "research_data.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+namespaces = false
+
+[tool.setuptools.package-data]
+research_data = ["resources/skill/*.md", "resources/skill/agents/*.yaml", "resources/skill/references/*.md", "resources/skill/scripts/*.py"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["**/__pycache__/*", "**/*.pyc"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

@@ -1,0 +1,6 @@
+{
+  "x": "voltage",
+  "units": {"voltage": "V", "current": "A"},
+  "descriptions": {"voltage": "Applied voltage", "current": "Current"},
+  "coordinates": {"current": ["voltage"]}
+}

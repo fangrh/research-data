@@ -1,0 +1,9 @@
+{
+  "kind": "compare",
+  "x": "voltage",
+  "y": "current",
+  "theme": "paper",
+  "title": "Current versus voltage",
+  "width": 900,
+  "height": 550
+}
