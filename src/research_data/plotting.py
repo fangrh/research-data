@@ -156,8 +156,15 @@ def render_plot(datasets: Sequence[xr.Dataset], recipe: Mapping[str, Any], label
                 if kind not in {"line", "scatter", "compare", "complex"}:
                     raise ValueError(f"Unknown plot kind {kind!r}")
                 name = f"{labels[di]} · {yname}" if len(ys) > 1 or len(datasets) > 1 else str(yname)
-                fig.add_trace(go.Scatter(x=x, y=y, mode=mode, name=name, line={"color": colors[(di + yi) % len(colors)]}, marker={"color": colors[(di + yi) % len(colors)]}))
-    fig.update_layout(template=theme["template"], title=recipe.get("title"), width=recipe.get("width"), height=recipe.get("height"), xaxis_title=recipe.get("x_label") or xname, yaxis_title=recipe.get("y_label"), showlegend=True)
+                dash = "dash" if recipe.get("theme") == "paper_dashed" and (di + yi) % 2 else "solid"
+                fig.add_trace(go.Scatter(x=x, y=y, mode=mode, name=name, line={"color": colors[(di + yi) % len(colors)], "dash": dash}, marker={"color": colors[(di + yi) % len(colors)]}))
+    x_unit = _units(datasets[0], str(xname))
+    x_title = str(xname) + (f" ({x_unit})" if x_unit else "")
+    y_title = None
+    if kind != "heatmap" and len(ys) == 1:
+        y_unit = "rad" if recipe.get("component") == "phase" else _units(datasets[0], str(ys[0]))
+        y_title = str(ys[0]) + (f" ({y_unit})" if y_unit else "")
+    fig.update_layout(template=theme["template"], title=recipe.get("title"), width=recipe.get("width"), height=recipe.get("height", 500), xaxis_title=recipe.get("x_label") or x_title, yaxis_title=recipe.get("y_label") or y_title, showlegend=True, legend={"orientation": "h", "x": 0, "y": -0.22}, margin={"l": 65, "r": 20, "t": 70, "b": 80})
     if recipe.get("log_x"):
         fig.update_xaxes(type="log")
     if recipe.get("log_y"):
