@@ -139,33 +139,54 @@ class Catalog:
             c.execute("DELETE FROM artifacts WHERE run_id=?", (m["run_id"],))
             for a in m["artifacts"]: c.execute("INSERT INTO artifacts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (a["artifact_id"],m["run_id"],a["path"],a["original_name"],a["role"],a["description"],a["sha256"],a["size_bytes"],a["format"],json.dumps(a.get("variables",[])),json.dumps(a.get("profile")),json.dumps(a.get("metadata",{}))))
     def register_artifact(self, run_id, path, role="raw", description="", variables=None, profile=None, copy=True, metadata=None):
+        artifacts, _ = self.register_artifacts(run_id, [path], role=role, description=description, variables=variables, profile=profile, copy=copy, metadata=metadata)
+        return artifacts[0]
+    def register_artifacts(self, run_id, paths, role="raw", description="", descriptions=None, variables=None, profile=None, copy=True, metadata=None, strict=True):
+        """Register many artifacts with one manifest write and index refresh.
+
+        Returns (artifacts, errors); errors maps str(path) to str(exception).
+        strict=True keeps the single-file API semantics and re-raises the first
+        failure; strict=False records failures and registers the rest.
+        """
         base = (self.root / "runs" / _rid(run_id)).resolve()
         with _run_lock(base):
-            return self._register_artifact_locked(run_id, path, role, description, variables, profile, copy, metadata)
-    def _register_artifact_locked(self, run_id, path, role, description, variables, profile, copy, metadata):
-        m = self._manifest(run_id); src = Path(path).resolve(); base = (self.root / "runs" / _rid(run_id)).resolve(); aid = uuid4().hex
-        if not src.exists(): raise FileNotFoundError(src)
-        dest = base / "artifacts" / f"{aid}-{src.name}"; dest.parent.mkdir(exist_ok=True)
-        managed = dest if copy else src
-        if copy:
-            if src.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
-                source_db = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
-                target_db = sqlite3.connect(dest)
-                try: source_db.backup(target_db)
-                finally: target_db.close(); source_db.close()
-            else:
-                shutil.copy2(src, dest)
-        rel = managed.relative_to(base) if managed.is_relative_to(base) else None
-        if rel is None and copy is False:
-            raise ValueError("copy=False artifact must be inside the run directory")
-        from .adapters import inspect_file
-        inferred = variables or []
-        metadata = dict(metadata or {})
-        if not inferred:
-            try: inferred = inspect_file(managed, profile).get("variables", [])
-            except Exception as exc: metadata["inspection_error"] = str(exc)
-        a = {"artifact_id": aid, "path": str(rel).replace("\\", "/"), "original_name": src.name, "role": role, "description": description, "sha256": _sha(managed), "size_bytes": managed.stat().st_size, "format": src.suffix.lower().lstrip("."), "variables": inferred, "profile": profile, "metadata": metadata or {}}
-        m["artifacts"].append(a); self._write(m); self._index(m); return a
+            m = self._manifest(run_id)
+            from .adapters import inspect_file
+            descriptions = descriptions or {}
+            artifacts, errors = [], {}
+            for path in paths:
+                try:
+                    src = Path(path).resolve(); aid = uuid4().hex
+                    if not src.exists(): raise FileNotFoundError(src)
+                    dest = base / "artifacts" / f"{aid}-{src.name}"; dest.parent.mkdir(exist_ok=True)
+                    managed = dest if copy else src
+                    if copy:
+                        if src.suffix.lower() in {".db", ".sqlite", ".sqlite3"}:
+                            source_db = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
+                            target_db = sqlite3.connect(dest)
+                            try: source_db.backup(target_db)
+                            finally: target_db.close(); source_db.close()
+                        else:
+                            shutil.copy2(src, dest)
+                    rel = managed.relative_to(base) if managed.is_relative_to(base) else None
+                    if rel is None and copy is False:
+                        raise ValueError("copy=False artifact must be inside the run directory")
+                    inferred = variables or []
+                    file_metadata = dict(metadata or {})
+                    if not inferred:
+                        try: inferred = inspect_file(managed, profile).get("variables", [])
+                        except Exception as exc: file_metadata["inspection_error"] = str(exc)
+                    file_description = description
+                    for key in (str(path), src.name):
+                        if key in descriptions:
+                            file_description = descriptions[key]; break
+                    artifacts.append({"artifact_id": aid, "path": str(rel).replace("\\", "/"), "original_name": src.name, "role": role, "description": file_description, "sha256": _sha(managed), "size_bytes": managed.stat().st_size, "format": src.suffix.lower().lstrip("."), "variables": inferred, "profile": profile, "metadata": file_metadata or {}})
+                except Exception as exc:
+                    if strict: raise
+                    errors[str(path)] = str(exc)
+            if artifacts:
+                m["artifacts"].extend(artifacts); self._write(m); self._index(m)
+            return artifacts, errors
     def finish_run(self, run_id, status="completed", error=None):
         if status not in _EXECUTION: raise ValueError(f"invalid execution status: {status}")
         with _run_lock(self.root / "runs" / _rid(run_id)):

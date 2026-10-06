@@ -130,9 +130,12 @@ research-data import old.csv --title "历史电流扫描" --kind experiment --pr
 
 历史文件默认来源 `unknown`，不会套用当前 Git 版本。确有依据时才显式提供 `--repo`、`--entrypoint` 和 `--source`。
 
+批量历史导入用 Python API 的 `register_artifacts(run_id, paths, strict=False)`：一次写 manifest
+和索引，失败的文件记入返回的 errors 而不中断整批；完成状态建议 `finish_run(run_id, "imported")`。
+
 | 格式 | 首次说明的映射 |
 |---|---|
-| CSV / TSV / JSON / JSONL / Parquet | `x`、`rename`、`units`、`descriptions`；JSON 为 records 或 column arrays |
+| CSV / TSV / JSON / JSONL / TOML / Parquet | `x`、`rename`、`units`、`descriptions`；JSON 与 TOML 为 records（含 `records`/`data`/`rows` 键）或 column arrays |
 | HDF5 | `variables` 选择路径或路径→名称映射；`coordinates` 指定变量维度；也读取 `dimensions` 属性或维度标签 |
 | NetCDF | 读取文件自身变量、维度和单位 |
 | QCoDeS SQLite | `qcodes_guid` 或 `qcodes_run_id`，通过官方只读接口读取 |

@@ -57,6 +57,10 @@ def _json_frame(path: Path, profile: dict) -> pd.DataFrame:
         records = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
         return pd.DataFrame(records)
     obj = json.loads(path.read_text(encoding="utf-8"))
+    return _records_or_columns(obj, "JSON")
+
+
+def _records_or_columns(obj: Any, label: str) -> pd.DataFrame:
     if isinstance(obj, dict):
         for key in ("records", "data", "rows"):
             if key in obj and isinstance(obj[key], list):
@@ -66,7 +70,14 @@ def _json_frame(path: Path, profile: dict) -> pd.DataFrame:
         return pd.DataFrame(obj)
     if isinstance(obj, dict):
         return pd.DataFrame(obj)
-    raise ValueError("JSON must contain records or column arrays")
+    raise ValueError(f"{label} must contain records or column arrays")
+
+
+def _toml_frame(path: Path, profile: dict) -> pd.DataFrame:
+    import tomllib
+    with path.open("rb") as fh:
+        obj = tomllib.load(fh)
+    return _records_or_columns(obj, "TOML")
 
 
 def _hdf5(path: Path, profile: dict) -> xr.Dataset:
@@ -170,6 +181,8 @@ def load_file(path: str | Path, profile: dict | None = None) -> xr.Dataset:
         return _dataset_from_frame(frame, prof)
     if fmt in {"json", "jsonl"}:
         return _dataset_from_frame(_json_frame(p, prof), prof)
+    if fmt == "toml":
+        return _dataset_from_frame(_toml_frame(p, prof), prof)
     if fmt in {"parquet", "pq"}:
         return _dataset_from_frame(pd.read_parquet(p), prof)
     if fmt in {"h5", "hdf5"}:

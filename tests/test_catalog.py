@@ -64,3 +64,38 @@ def test_concurrent_artifact_registration_and_default_load(tmp_path: Path):
     assert len(catalog.get(run.run_id)["artifacts"]) == 2
     assert catalog.select_artifact(run.run_id)["artifact_id"] == results[0]["artifact_id"]
     assert "x" in catalog.load_dataset(run.run_id)
+
+
+def test_batch_registration_single_write_and_error_modes(tmp_path: Path):
+    catalog = Catalog(tmp_path / "catalog")
+    files = []
+    for i in range(3):
+        p = tmp_path / f"v{i}.csv"
+        p.write_text(f"x\n{i}\n", encoding="utf-8")
+        files.append(p)
+    run = catalog.start_run("batch", project="bulk")
+    artifacts, errors = catalog.register_artifacts(
+        run.run_id, files, description="batch historical import",
+        descriptions={files[1].name: "second file"})
+    assert not errors and len(artifacts) == 3
+    assert artifacts[1]["description"] == "second file"
+    manifest = catalog.get(run.run_id)
+    assert [a["original_name"] for a in manifest["artifacts"]] == [p.name for p in files]
+    assert manifest["artifacts"][0]["description"] == "batch historical import"
+    assert catalog.check(run.run_id)["ok"]
+    with catalog._connect() as c:
+        assert c.execute("SELECT COUNT(*) FROM artifacts WHERE run_id=?", (run.run_id,)).fetchone()[0] == 3
+    # strict mode keeps raising like the single-file API
+    try:
+        catalog.register_artifacts(run.run_id, [tmp_path / "missing.csv"])
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("missing file accepted in strict mode")
+    # lenient mode records the failure and still registers the rest
+    more = tmp_path / "v3.csv"; more.write_text("x\n9\n", encoding="utf-8")
+    artifacts, errors = catalog.register_artifacts(run.run_id, [tmp_path / "missing.csv", more], strict=False)
+    assert list(errors) == [str(tmp_path / "missing.csv")]
+    assert [a["original_name"] for a in artifacts] == ["v3.csv"]
+    run.finish("imported")
+    assert catalog.get(run.run_id)["execution_status"] == "imported"
