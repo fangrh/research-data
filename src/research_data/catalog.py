@@ -342,7 +342,7 @@ class Catalog:
                 if artifact.get("artifact_id") == artifact_id: return dict(artifact)
             raise KeyError(artifact_id)
         for artifact in artifacts:
-            if artifact.get("role") not in {"log", "figure", "plot", "recipe"}:
+            if artifact.get("role") not in {"log", "figure", "plot", "recipe", "cover"}:
                 return dict(artifact)
         raise KeyError("no loadable data artifact")
     def load_dataset(self, run_id, artifact_id=None, profile=None):

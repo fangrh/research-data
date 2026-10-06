@@ -263,15 +263,30 @@ def main(root: str | None = None) -> None:
             st.session_state["up_filter"] = {"field": field, "value": up_param}
 
     @st.cache_data(show_spinner=False, max_entries=600)
-    def _cover_png(catalog_root: str, run_id: str, badge: str = "", fp_key: str = ""):
-        """数据封面缩略图（缓存）。逐个尝试 run 内小文件（大 CSV 只读头部 256 行）；
-        都不可绘制时用参数指纹（蓝色）兜底；仍无则 None 走占位卡。"""
+    def _cover_png(catalog_root: str, run_id: str, badge: str = "", fp_key: str = "", project: str = ""):
+        """封面（缓存）。优先级：run 级 cover artifact > 项目模型示意图
+        （catalog/covers/<project>.png，由 agent 生成）> 数据 sparkline >
+        参数指纹（蓝色）> None 占位卡。"""
         try:
             from research_data.catalog import Catalog, _inside
             from research_data.thumbnails import draw_sparkline, fingerprint_series, series_for_artifact
             cat = Catalog(catalog_root)
             manifest = cat.get(run_id)
             run_dir = cat.root / "runs" / run_id
+            # 1) run 级封面（agent 登记的 role=cover 图片）
+            for art in manifest.get("artifacts", []):
+                if art.get("role") == "cover" and art.get("format") in {"png", "jpg", "jpeg", "webp"}:
+                    try:
+                        path = _inside(run_dir, art["path"])
+                        if path.is_file() and path.stat().st_size < 8_000_000:
+                            return path.read_bytes(), "model"
+                    except ValueError:
+                        pass
+            # 2) 项目模型示意图（agent 按物理模型批量生成）
+            if project:
+                shared = cat.root / "covers" / f"{project}.png"
+                if shared.is_file() and shared.stat().st_size < 8_000_000:
+                    return shared.read_bytes(), "model"
             candidates = sorted(manifest.get("artifacts", []),
                                 key=lambda a: a.get("size_bytes") or 0)[:8]
             for art in candidates:
@@ -439,7 +454,8 @@ def main(root: str | None = None) -> None:
                              (f"{human_count((r.get('parameters') or {}).get('total_bytes', 0) / 1e6)}MB"
                               if (r.get("parameters") or {}).get("total_bytes") else ""))
                     png, mode = _cover_png(str(root), r["run_id"], badge,
-                                           fp_key=json.dumps(r.get("parameters") or {}, sort_keys=True, default=str))
+                                           fp_key=json.dumps(r.get("parameters") or {}, sort_keys=True, default=str),
+                                           project=str(r.get("project") or ""))
                     href = f"?pick={r['run_id']}" + (f"&up={quote(up_filter['value'], safe='')}" if up_filter else "")
                     title_html = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
                     if png:

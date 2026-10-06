@@ -66,3 +66,13 @@ generator "UP", site/backend/language/accelerator facets, compute command, file
 counts). Ask per field with existing facet values as choices; embedded file fields
 (exact_command, gpu_name, backend) take precedence verbatim. Historical imports
 keep provenance unknown; generated runs capture provenance via the run wrapper.
+
+## Cover is a required thinking step
+
+Before finishing registration, generate a model-schematic cover with
+`research_data.schematics.draw_archetype(...)` (choose honeycomb / flake /
+magnetic_cell / landau / chain / kernel / spectrum from what the data
+physically is) and register it with `role="cover"`, or place a shared
+`catalog/covers/<project>.png`. Auto sparklines and parameter fingerprints
+are fallbacks only, never the agent's delivered cover. See
+docs/REGISTRATION_FIELDS.md.

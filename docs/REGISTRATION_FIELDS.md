@@ -36,3 +36,18 @@ agent 不要手填；`import` 历史数据一律 provenance=unknown，不冒用�
 2. 数据文件若内嵌 `exact_command` / `gpu_name` / `backend` 等字段，直接采用原文并标注
    `compute_provenance=file-field`；只有推断才标 `post-hoc-inference`。
 3. 登记后立即 `finish_run(..., "imported")`（历史）或正常 completed（生成），并回读校验。
+
+## 封面（强制思考步骤）
+
+每个 run 必须有一个能看懂的封面，登记 agent 在登记时**先想清楚数据的物理模型**再选封面：
+
+1. **run 级封面（首选）**：用 `research_data.schematics.draw_archetype(archetype, title, params)`
+   画模型示意图，然后 `catalog.register_artifact(run_id, png_path, role="cover")`。
+   archetype 从模型出发选：`honeycomb`（石墨烯/布洛赫）、`flake`（D6h 六角 flake）、
+   `magnetic_cell`（Hofstadter q 胞/磁场）、`landau`（朗道能级）、`chain`（有限链/条带/张量网络）、
+   `kernel`（响应核/层层展开）、`spectrum`（谱/级数/证明类）。title 写模型一句话，params 写关键量。
+2. **项目级示意图（次选）**：同一项目的 run 共用 `catalog/covers/<project>.png`
+   （同样由 schematics 生成），适合批量/历史导入。
+3. 自动 sparkline/参数指纹只是**兜底**，不允许作为 agent 登记的最终封面。
+
+禁止：把乱序参数指纹当封面交付；选 archetype 时不看数据含义随手挑。
