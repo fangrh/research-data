@@ -57,3 +57,12 @@ Use `plot` with registered run IDs and a saved recipe. The browser is `browse`; 
 Keep execution status separate from scientific validation. Mark validation passed only with explicit evidence. Software tests and successful process exits do not establish convergence or physical support.
 
 Return the run IDs, catalog location and figure/data links. `check` verifies recorded bytes; `rebuild` reconstructs the SQLite index from manifests. Do not migrate, delete or publish unrelated existing datasets without the user's scope.
+
+## Registration interview fields
+
+When registering data on behalf of a user, follow the canonical field checklist in
+`docs/REGISTRATION_FIELDS.md` (title/project channel, kind, categories including
+generator "UP", site/backend/language/accelerator facets, compute command, file
+counts). Ask per field with existing facet values as choices; embedded file fields
+(exact_command, gpu_name, backend) take precedence verbatim. Historical imports
+keep provenance unknown; generated runs capture provenance via the run wrapper.

@@ -196,8 +196,11 @@ def test_big_catalog_browse_basket_flow(tmp_path, monkeypatch):
         return next(item for item in collection
                     if item.label == label or getattr(item, "key", None) == label)
 
-    # 大目录路径：没有巨型多选框，有总列表与对比篮
+    # 大目录路径：默认卡片墙（无巨型多选框）；切到表格视图后总列表挂载
     assert not any(getattr(w, "label", "") == "选择运行（可多选比较）" for w in app.multiselect)
+    view_radio = next(r for r in app.radio
+                      if r.label == "视图" or "卡片" in (getattr(r, "options", None) or []))
+    view_radio.set_value("表格").run()
     assert "runs_table" in app.session_state  # st.dataframe 总列表已挂载
     assert widget(app.button, "加入对比")
     assert widget(app.button, "加载所选运行")
@@ -211,6 +214,16 @@ def test_big_catalog_browse_basket_flow(tmp_path, monkeypatch):
     widget(app.button, "生成图表").click().run()
     assert not list(app.exception)
     assert "figure" in app.session_state
+    # 点赞/收藏/评论可用且持久化到 interactions.json
+    current_id = app.session_state["selected_identity"][0]
+    widget(app.button, "⭐ 收藏").click().run()
+    widget(app.button, "👍 点赞").click().run()
+    widget(app.text_area, "写评论").set_value("封面缩略图不错").run()
+    widget(app.button, "发布评论").click().run()
+    assert not list(app.exception)
+    from research_data.social import Interactions
+    state = Interactions(cat.root).state(current_id)
+    assert state == {"liked": True, "favorite": True, "comments": 1}
     # 搜索过滤走索引路径且不炸
     widget(app.text_input, "搜索标题 / 描述 / 标签").set_value("sweep 29").run()
     assert not list(app.exception)
