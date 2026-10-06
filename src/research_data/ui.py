@@ -92,7 +92,7 @@ def _query_value(context: Mapping[str, object], key: str) -> object:
 def browse_url(context: Mapping[str, object] | None = None, **changes: object) -> str:
     """Build a same-page browse link while retaining only browse context.
 
-    ``catalog`` and ``project_dir`` come from the current context.  The three
+    ``catalog`` and ``project_dir`` come from the current context.  The
     navigation keys (including collections and workspaces) are explicitly supplied by
     callers; ``None`` removes a key.  Other query parameters are discarded so
     widget state never leaks into card links.

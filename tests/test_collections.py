@@ -64,7 +64,13 @@ def test_collection_mutations_preserve_run_bytes_and_concurrent_adds(tmp_path):
     value = store.create("Concurrent", run_ids=[runs[0]])
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda rid: store.add(value["collection_id"], rid), runs[1:]))
-    assert {item["run_id"] for item in results[-1]["members"]} == set(runs)
+    # map preserves input order, while either writer can acquire the lock last.
+    # Reopen after joining both writers to test durable state, and verify that
+    # each writer's own snapshot includes the membership it added.
+    persisted = CollectionStore(catalog.root).get(value["collection_id"])
+    assert {item["run_id"] for item in persisted["members"]} == set(runs)
+    for rid, result in zip(runs[1:], results):
+        assert {runs[0], rid} <= {item["run_id"] for item in result["members"]}
     for rid, before in run_files.items():
         folder = catalog.root / "runs" / rid
         after = {p.relative_to(folder): hashlib.sha256(p.read_bytes()).hexdigest() for p in folder.rglob("*") if p.is_file()}
