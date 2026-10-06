@@ -190,9 +190,23 @@ def main(root: str | None = None) -> None:
     st.set_page_config(page_title="研究数据浏览器", page_icon="📈", layout="wide")
     from research_data.agent import default_catalog
     root = root or st.session_state.get("catalog_root") or default_catalog()
-    st.title("研究数据浏览器")
-    st.caption("实验 / Experiment → 样品 / Sample → 运行 / Run；点击运行即可查看数据与来源。")
-    with st.sidebar:
+    # ── Bilibili 式顶栏：品牌+首页 | 居中搜索 | 右侧功能入口；隐藏 Streamlit 装饰 ──
+    st.markdown("<style>#MainMenu, .stDeployButton, div[data-testid='stToolbar'], "
+                "div[data-testid='stDecoration'], footer {visibility:hidden !important; height:0 !important;}"
+                "header[data-testid='stHeader'] {display:none !important;}"
+                "section[data-testid='stSidebar'] {display:none !important;}</style>", unsafe_allow_html=True)
+    head_l, head_m, head_r = st.columns([1.1, 2.4, 1.1])
+    with head_l:
+        st.markdown("### <a href='/' style='text-decoration:none;color:#fb7299'>📺 研究数据</a>"
+                    "&nbsp;<a href='/' style='text-decoration:none;color:#61666d;font-size:14px'>首页</a>",
+                    unsafe_allow_html=True)
+    with head_m:
+        query = st.text_input("搜索标题 / 描述 / 标签", placeholder="搜索 run / 脚本 / 目录…")
+    with head_r:
+        st.markdown("<div style='padding-top:8px;text-align:right'>"
+                    "<a href='/?fav=1' style='text-decoration:none;font-size:15px'>⭐ 收藏</a>&nbsp;&nbsp;"
+                    "<span style='color:#61666d;font-size:15px'>⚙️ 设置 ↓</span></div>", unsafe_allow_html=True)
+    with st.expander("⚙️ 设置 / 使用帮助 / 首次导入", expanded=False):
         st.text_input("Catalog 根目录", value=str(root), key="catalog_root")
         root = st.session_state.catalog_root
         query_project = st.query_params.get("project_dir") if hasattr(st, "query_params") else None
@@ -309,10 +323,11 @@ def main(root: str | None = None) -> None:
         if pick and re.fullmatch(r"[A-Za-z0-9_\-]+", pick) else None
     if pick and dedicated is None:
         st.warning(f"未找到运行 {pick}，已回到首页。")
-    with st.sidebar:
+    with st.expander("🎛️ 筛选（样品 / 类型 / 状态 / 分类）"):
         def choices(field): return ["全部", *sorted({str(r.get(field)) for r in runs if r.get(field) not in (None, "")})]
-        sample = st.selectbox("样品", choices("sample"))
-        kind, status = st.selectbox("类型", choices("kind")), st.selectbox("状态", choices("execution_status"))
+        f1, f2, f3 = st.columns(3)
+        sample = f1.selectbox("样品", choices("sample"))
+        kind, status = f2.selectbox("类型", choices("kind")), f3.selectbox("状态", choices("execution_status"))
         # 按分类键逐个筛选（视频网站式 facet），最多 8 个键
         cat_keys: dict[str, set] = {}
         for r in runs:
@@ -322,9 +337,10 @@ def main(root: str | None = None) -> None:
                     cat_keys.setdefault(k, set()).add(str(v))
         facet_keys = sorted(cat_keys, key=lambda k: -len(cat_keys[k]))[:8]
         facet_values = {}
-        for key in facet_keys:
-            facet_values[key] = st.selectbox(f"分类 · {key}", ["全部", *sorted(cat_keys[key])], key=f"facet_{key}")
-        only_favorites = st.checkbox("⭐ 只看收藏", value=False, key="only_favorites")
+        fcols = st.columns(4)
+        for i, key in enumerate(facet_keys):
+            facet_values[key] = fcols[i % 4].selectbox(f"分类 · {key}", ["全部", *sorted(cat_keys[key])], key=f"facet_{key}")
+    only_favorites = (hasattr(st, "query_params") and st.query_params.get("fav") == "1")
     scalar = {k: v for k, v in {"sample": sample, "kind": kind, "execution_status": status}.items() if v != "全部"}
     up_filter = st.session_state.get("up_filter")  # {"field": "generator"|"project", "value": str}
     if dedicated is not None:
@@ -345,16 +361,12 @@ def main(root: str | None = None) -> None:
                 c = r.get("categories")
                 if not (isinstance(c, dict) and str(c.get(key)) == chosen): return False
             return True
-        # ── 顶栏：搜索（Bilibili 式居中）+ 排序 + 视图切换 ──
-        top_a, top_b = st.columns([3, 2])
-        with top_a:
-            query = st.text_input("搜索标题 / 描述 / 标签", placeholder="搜索 run / 脚本 / 目录…")
-        with top_b:
-            sort_view = st.columns(2)
-            with sort_view[0]:
-                order = st.selectbox("排序", ["最新优先", "最早优先", "文件最多"], label_visibility="collapsed")
-            with sort_view[1]:
-                view = st.radio("视图", ["卡片", "表格"], horizontal=True, label_visibility="collapsed")
+        # ── 排序 + 视图切换（搜索已在顶栏）──
+        sort_view = st.columns([1, 2])
+        with sort_view[0]:
+            order = st.selectbox("排序", ["最新优先", "最早优先", "文件最多"], label_visibility="collapsed")
+        with sort_view[1]:
+            view = st.radio("视图", ["卡片", "表格"], horizontal=True, label_visibility="collapsed")
         # ── 分区导航行：项目频道（Bilibili 频道栏），按 run 数取前 15 ──
         project_counts: dict[str, int] = {}
         for r in runs:
