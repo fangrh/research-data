@@ -97,3 +97,28 @@ def test_real_qcodes_dataset(tmp_path: Path):
     renamed = tmp_path / "renamed.db"
     os.replace(db, renamed)
     assert renamed.exists()
+
+
+def test_toml_records_and_column_arrays(tmp_path: Path):
+    rec = tmp_path / "rows.toml"
+    rec.write_text(
+        '[[rows]]\nx = 2\ny = 4\n[[rows]]\nx = 3\ny = 9\n', encoding="utf-8")
+    ds = load_file(rec, {"x": "x", "units": {"y": "V"}})
+    assert ds.y.dims == ("x",)
+    assert np.allclose(ds.x.values, [2, 3]) and np.allclose(ds.y.values, [4, 9])
+    assert ds.y.attrs["units"] == "V"
+    cols = tmp_path / "cols.toml"
+    cols.write_text("time = [5, 4]\nsignal = [2.5, 3.5]\n", encoding="utf-8")
+    ds2 = load_file(cols, {"x": "time"})
+    assert ds2.signal.dims == ("time",)
+    assert np.allclose(ds2.time.values, [5, 4])
+    assert inspect_file(rec)["variables"]
+    # all-scalar TOML fails exactly like all-scalar JSON (pandas rejects it)
+    plain = tmp_path / "scalar.toml"
+    plain.write_text("title = \"config note\"\n", encoding="utf-8")
+    try:
+        load_file(plain)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("all-scalar TOML accepted")

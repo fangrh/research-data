@@ -30,7 +30,7 @@ Methods:
 - `run(**kwargs) -> Run` context manager, captures provenance before data generation; exceptions persist failed execution and re-raise.
 - `get(run_id) -> dict`, `list_runs(query='', filters=None) -> list[dict]`, `rebuild_index() -> int`, `check(run_id=None) -> dict`.
 - `list_runs_summary(query='', filters=None) -> list[dict]` reads the SQLite index only (run_id/title/project/sample/kind/execution_status/created_at/updated_at/tags/categories/parameters/description); supports project/sample/kind/execution_status/tag/category.*/parameter.* filters plus case-insensitive query, raises ValueError for provenance filters. The browser list view uses this path. `rust/rspeed` is an optional native accelerator (`research_data_rspeed.load_run_summaries`, PyO3+rusqlite, built with maturin); when importable the loader dispatches to it, otherwise the pure-Python reference runs.
-- `register_artifact(run_id, path, role='raw', description='', variables=None, profile=None, copy=True, metadata=None) -> dict`.
+- `register_artifacts(run_id, paths, role='raw', description='', descriptions=None, variables=None, profile=None, copy=True, metadata=None, strict=True) -> (artifacts, errors)`; registers many files with one manifest write and index refresh. `descriptions` maps str(path) or basename to a per-file description. strict=True keeps single-file semantics (first failure re-raises); strict=False records failures in errors {str(path): message} and registers the rest. `register_artifact(run_id, path, ...) -> dict` is the single-file wrapper.
 - `finish_run(run_id, status='completed', error=None) -> dict`; `set_validation(run_id, status, evidence=None, notes='') -> dict`.
 - `load_dataset(run_id, artifact_id=None, profile=None) -> xarray.Dataset`.
 - `save_recipe(name, recipe) -> Path`, `load_recipe(name) -> dict`, `list_recipes() -> list[str]` (safe names).
@@ -41,7 +41,7 @@ Core imports `capture_provenance(repo, run_dir, entrypoint=None, command=None, s
 ## Format adapters
 
 `inspect_file(path, profile=None) -> dict` returns format, variables (name, dims, shape, dtype, unit, description), summary and any warnings.
-`load_file(path, profile=None) -> xarray.Dataset` normalizes CSV, TSV, columnar/record JSON, HDF5, NetCDF, Parquet, and real QCoDeS .db.
+`load_file(path, profile=None) -> xarray.Dataset` normalizes CSV, TSV, columnar/record JSON, TOML (same records-or-column-arrays semantics as JSON via tomllib), HDF5, NetCDF, Parquet, and real QCoDeS .db.
 Profile fields: `format`, `x`, `rename`, `units`, `descriptions`, `coordinates` (variable -> coordinate list), `qcodes_guid`/`qcodes_run_id`, `variables` (optional selected variable names), plus documented reader-specific selection. HDF5 and JSON can require explicit mappings when self-description is absent. Preserve acquisition order and complex values; never guess units or implicitly sort/regrid/normalize.
 
 ## Plotting and UI
