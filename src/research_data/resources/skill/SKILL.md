@@ -76,3 +76,14 @@ physically is) and register it with `role="cover"`, or place a shared
 `catalog/covers/<project>.png`. Auto sparklines and parameter fingerprints
 are fallbacks only, never the agent's delivered cover. See
 docs/REGISTRATION_FIELDS.md.
+
+## Review dispatch (user comments -> your evaluation -> actions)
+
+Users click 派 agent 评价 on a run page; the request lands in
+`reviews/pending/`. Claim it with `research-data review list` /
+`review show --request-id ID`, READ the run and its data, then post your
+evaluation with `review complete --request-id ID --reply-file reply.md
+[--validation partial|failed|passed --validation-notes ...]`. Your reply
+appears in the comment thread as author `AI agent`; a validation status,
+when justified by the user's comments and your check, records the
+follow-up. `passed` requires evidence.

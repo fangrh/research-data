@@ -580,8 +580,25 @@ def main(root: str | None = None) -> None:
         for c in social.comments(run["run_id"]):
             st.markdown(f"**{c['author']}** · `{(c.get('ts') or '')[:16].replace('T', ' ')}`\n\n{c['text']}")
         new_comment = st.text_area("写评论", key=f"comment_box_{run['run_id']}", height=68)
-        if st.button("发布评论", key=f"comment_post_{run['run_id']}") and new_comment.strip():
+        post_col, agent_col = st.columns(2)
+        if post_col.button("发布评论", key=f"comment_post_{run['run_id']}", use_container_width=True) and new_comment.strip():
             social.add_comment(run["run_id"], new_comment); st.rerun()
+        if agent_col.button("🤖 派 agent 评价", key=f"review_{run['run_id']}", use_container_width=True,
+                            help="把评论框内容作为评价指令派给 AI agent（research-data review 领取）"):
+            from research_data.review import request_review
+            request_review(root, run["run_id"], instruction=new_comment)
+            st.session_state[f"review_sent_{run['run_id']}"] = True
+            st.rerun()
+        if st.session_state.get(f"review_sent_{run['run_id']}"):
+            st.session_state.pop(f"review_sent_{run['run_id']}", None)
+            st.success("已派出评价请求：agent 用 `research-data review list` 领取并回复到这里。")
+        try:
+            from research_data.review import list_pending
+            pending_n = sum(1 for r in list_pending(root) if r["run_id"] == run["run_id"])
+            if pending_n:
+                st.caption(f"🤖 {pending_n} 条评价请求待 agent 处理")
+        except Exception:
+            pass
     with page_r:
         related_pool = [r for r in filtered if r.get("project") == run.get("project")
                         and r["run_id"] != run["run_id"]][:6]

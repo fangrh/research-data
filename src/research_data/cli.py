@@ -106,6 +106,13 @@ def parser():
     finish.add_argument("run_id")
     finish.add_argument("--status", choices=["completed", "failed", "imported"], default="completed")
     finish.add_argument("--error")
+    review = command("review", "Agent review dispatch: list/show pending user-review requests and complete them")
+    review.add_argument("operation", choices=["list", "show", "complete"], nargs="?", default="list")
+    review.add_argument("--request-id", help="Review request id (see review list)")
+    review.add_argument("--reply", default="", help="Agent evaluation text for complete")
+    review.add_argument("--reply-file", help="Read the evaluation reply from a file")
+    review.add_argument("--validation", choices=["not_checked", "partial", "passed", "failed"], help="Optional validation status to record with the review")
+    review.add_argument("--validation-notes", default="", help="Notes stored with the validation update")
     search = command("search", "Search descriptions, metadata and structured classifications")
     search.add_argument("query", nargs="?", default="")
     search.add_argument("--filter", action="append", default=[])
@@ -327,6 +334,26 @@ def main(argv=None):
             _emit(run.manifest)
         elif args.action == "finish":
             _emit(cat.finish_run(args.run_id, status=args.status, error=args.error))
+        elif args.action == "review":
+            from . import review as review_api
+            if args.operation == "list":
+                _emit(review_api.list_pending(args.root))
+            elif args.operation == "show":
+                if not args.request_id:
+                    raise ValueError("--request-id is required for review show")
+                matches = [r for r in review_api.list_pending(args.root) if r["request_id"] == args.request_id]
+                if not matches:
+                    raise FileNotFoundError(args.request_id)
+                _emit(matches[0])
+            else:
+                if not args.request_id:
+                    raise ValueError("--request-id is required for review complete")
+                reply = args.reply
+                if args.reply_file:
+                    reply = Path(args.reply_file).read_text(encoding="utf-8")
+                _emit(review_api.complete_review(args.root, args.request_id, reply,
+                                                  validation=args.validation,
+                                                  validation_notes=args.validation_notes))
         elif args.action == "search":
             _emit(cat.list_runs(args.query, filters=_pairs(args.filter)))
         elif args.action == "show":
