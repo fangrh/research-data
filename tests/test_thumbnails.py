@@ -63,3 +63,17 @@ def test_series_for_artifact_big_csv_head_and_fingerprint():
         fp = fingerprint_series({"file_count": 12, "total_bytes": 3400, "note": "x"})
         assert fp is not None and fp.size == 2
         assert fingerprint_series({"note": "x"}) is None
+
+
+def test_animated_gif_frames_and_global_normalization():
+    import io
+    import numpy as np
+    from PIL import Image
+    from research_data.thumbnails import animated_gif
+    matrix = np.sin(np.linspace(0, 20, 500).reshape(10, 50))  # 10 帧 × 50 点
+    gif = animated_gif(matrix, fps=8)
+    assert gif is not None and gif[:3] == b"GIF"
+    img = Image.open(io.BytesIO(gif))
+    assert getattr(img, "n_frames", 1) == 10 and getattr(img, "is_animated", False)
+    assert animated_gif(np.ones((3, 4))) is not None      # 常数行不崩
+    assert animated_gif(np.ones((1, 4))) is None          # 单帧不成视频

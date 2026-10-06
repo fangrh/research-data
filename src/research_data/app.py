@@ -108,6 +108,79 @@ def _run_card(st, run):
     p = run.get("provenance") or {}
     st.caption(f"Git：{p.get('commit') or p.get('git_commit') or '未知'} / 分支：{p.get('git_branch') or p.get('branch') or '未知'}")
 
+def _player(st, catalog, run, root: str):
+    """Bilibili 式播放器：进入视频页立即看图/动画，无需先点加载。
+
+    优先展示已登记的图片 artifact；否则自动加载主数据渲染默认折线图；
+    数据含逐步演化矩阵时提供动画 GIF 标签页。
+    """
+    rid = run["run_id"]
+    figures = [a for a in run.get("artifacts", [])
+               if a.get("role") in {"figure", "plot"} and a.get("format") in {"png", "jpg", "jpeg", "webp"}]
+    if figures:
+        st.session_state["player"] = "figures"
+        for a in figures:
+            try:
+                from research_data.catalog import _inside
+                path = _inside(catalog.root / "runs" / rid, a["path"])
+                if path.is_file():
+                    st.image(path.read_bytes(), caption=a.get("description") or a.get("original_name"))
+            except Exception:
+                pass
+        return
+    try:
+        art = catalog.select_artifact(rid)
+        ds = catalog.load_dataset(rid, artifact_id=art.get("artifact_id"))
+    except Exception as exc:
+        st.session_state["player"] = "unavailable"
+        st.info(f"此运行无可自动播放的数据（{exc}）。")
+        return
+    tab_img, tab_vid = st.tabs(["📈 图", "🎬 动画"])
+    with tab_img:
+        st.session_state["player"] = "plot"
+        try:
+            axes = list(ds.coords) or [n for n, v in ds.data_vars.items() if v.ndim == 1]
+            ys = [n for n, v in ds.data_vars.items() if v.ndim == 1][:2] or list(ds.data_vars)[:1]
+            recipe = {"kind": "line", "x": axes[0] if axes else None, "y": ys, "theme": "paper"}
+            fig = render_plot([ds], recipe)
+            st.plotly_chart(fig, use_container_width=True, key=f"player_{rid}")
+        except Exception:
+            from research_data.thumbnails import cover_for_dataset
+            png = cover_for_dataset(ds)
+            if png:
+                st.image(png, use_container_width=True)
+            else:
+                st.caption("该数据无默认图；用下方“加载所选运行”后自由绘图。")
+    with tab_vid:
+        from research_data.thumbnails import matrix_for_dataset
+        found = matrix_for_dataset(ds)
+        if found is None:
+            st.caption("该数据没有逐步演化维度，无动画。")
+        else:
+            name, matrix = found
+            st.caption(f"变量 `{name}`：{matrix.shape[0]} 帧逐行播放（全局归一化）")
+            _gif = _player_gif(str(root), rid, art.get("artifact_id"), art.get("sha256"), name)
+            if _gif:
+                st.image(_gif, use_container_width=True)
+
+
+def _player_gif(catalog_root: str, run_id: str, artifact_id, sha, var_name: str):
+    import numpy as np
+    from research_data.thumbnails import animated_gif
+    try:
+        from research_data.catalog import Catalog
+        cat = Catalog(catalog_root)
+        ds = cat.load_dataset(run_id, artifact_id=artifact_id)
+        for name, var in ds.data_vars.items():
+            if name == var_name:
+                v = np.asarray(var.values)
+                matrix = np.vstack([np.atleast_1d(np.asarray(x)) for x in v]) if v.dtype == object else v
+                return animated_gif(matrix)
+    except Exception:
+        return None
+    return None
+
+
 def _data_artifact(run):
     artifacts = run.get("artifacts", []) or []
     return next((a for a in artifacts if a.get("role") not in {"log", "stdout", "stderr"} and a.get("format") not in {"log", "txt"}), artifacts[0] if artifacts else None)
@@ -447,6 +520,7 @@ def main(root: str | None = None) -> None:
     # ── 视频页布局：左侧数据卡+互动+评论，右侧相关推荐（Bilibili 式）──
     page_l, page_r = st.columns([4, 1.3])
     with page_l:
+        _player(st, catalog, run, str(root))
         _run_card(st, run)
         state = social.state(run["run_id"])
         act_a, act_b, act_c = st.columns([1, 1, 3])

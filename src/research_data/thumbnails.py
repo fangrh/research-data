@@ -113,6 +113,80 @@ def draw_sparkline(series: list[np.ndarray], badge: str | None = None,
     return buf.getvalue()
 
 
+def _frame_image(arr: np.ndarray, lo: float, hi: float, color=LINE) -> Image.Image:
+    if hi == lo:
+        hi = lo + 1.0
+    if arr.size > MAX_POINTS:
+        idx = np.linspace(0, arr.size - 1, MAX_POINTS).astype(int)
+        arr = arr[idx]
+    base = Image.new("RGBA", (WIDTH, HEIGHT), BG + (255,))
+    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(overlay)
+    for y in (HEIGHT // 4, HEIGHT // 2, 3 * HEIGHT // 4):
+        draw.line([(8, y), (WIDTH - 8, y)], fill=GRID, width=1)
+    n = arr.size
+    pad_x, pad_y = 10.0, 14.0
+    w, h = WIDTH - 2 * pad_x, HEIGHT - 2 * pad_y
+    pts = [(pad_x + i * w / (n - 1), pad_y + (1.0 - (v - lo) / (hi - lo)) * h)
+           for i, v in enumerate(arr.tolist())] if n > 1 else [(WIDTH / 2, HEIGHT / 2)]
+    if n == 1:
+        draw.ellipse([pts[0][0] - 4, pts[0][1] - 4, pts[0][0] + 4, pts[0][1] + 4], fill=color)
+    polygon = [pts[0], *pts, pts[-1], (pts[-1][0], HEIGHT - 8), (pts[0][0], HEIGHT - 8)]
+    draw.polygon(polygon, fill=tuple(color) + (40,))
+    draw.line(pts, fill=color, width=3, joint="curve")
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+
+def animated_gif(matrix: np.ndarray, fps: int = 8, max_frames: int = 120) -> bytes | None:
+    """把逐行数据渲染成全局归一化的动画 GIF（数据的"视频"）。"""
+    arr = np.asarray(matrix)
+    if arr.ndim != 2 or arr.shape[0] < 2 or arr.shape[1] < 2:
+        return None
+    if np.iscomplexobj(arr):
+        arr = np.abs(arr)
+    if arr.dtype == object:
+        try:
+            arr = arr.astype(float)
+        except (TypeError, ValueError):
+            return None
+    if not np.issubdtype(arr.dtype, np.number):
+        return None
+    arr = arr[:max_frames]
+    finite = arr[np.isfinite(arr)]
+    if finite.size < 2:
+        return None
+    lo, hi = float(finite.min()), float(finite.max())
+    if not np.isfinite(lo) or not np.isfinite(hi):
+        return None
+    frames = [_frame_image(row, lo, hi) for row in arr]
+    buf = io.BytesIO()
+    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
+                   duration=int(1000 / max(fps, 1)), loop=0)
+    return buf.getvalue()
+
+
+def matrix_for_dataset(ds) -> tuple[str, np.ndarray] | None:
+    """演化矩阵：数值 2-D 变量，或对象列内装等长数值列表（TOML rows 的 real/imag）。"""
+    for name, var in ds.data_vars.items():
+        v = np.asarray(var.values)
+        if v.ndim == 2 and v.shape[0] >= 2 and v.shape[1] >= 2 and (
+                np.issubdtype(v.dtype, np.number) or np.iscomplexobj(v)):
+            return str(name), (np.abs(v) if np.iscomplexobj(v) else v)
+        if v.ndim == 1 and v.dtype == object:
+            sample = next((x for x in v if x is not None), None)
+            if isinstance(sample, (list, tuple, np.ndarray)):
+                try:
+                    rows = [np.atleast_1d(np.asarray(x, dtype=complex if np.iscomplexobj(x) else float))
+                            for x in v if x is not None]
+                    matrix = np.vstack(rows)
+                    matrix = np.abs(matrix) if np.iscomplexobj(matrix) else matrix
+                    if matrix.shape[0] >= 2 and matrix.shape[1] >= 2:
+                        return str(name), matrix
+                except (TypeError, ValueError):
+                    continue
+    return None
+
+
 def human_count(n) -> str:
     """Bilibili 式计数：999+ / 1.2万。"""
     try:
