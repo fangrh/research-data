@@ -236,11 +236,11 @@ def main(root: str | None = None) -> None:
     except Exception as exc:
         st.error(f"无法打开 catalog：{exc}"); return
     social = Interactions(root)
-    # 封面直点：URL ?pick=<run_id> 选中运行；?up=<名> 进入 UP（脚本/项目）筛选
+    # 封面直点：URL ?pick=<run_id> 进入专属视频页（Bilibili BV 页，整页只显示该数据）
+    # ?up=<名> 进入 UP（脚本/项目）筛选
+    pick = None
     if hasattr(st, "query_params"):
         pick = st.query_params.get("pick")
-        if pick and re.fullmatch(r"[A-Za-z0-9_\-]+", pick):
-            st.session_state["card_pick"] = pick
         up_param = st.query_params.get("up")
         if up_param and re.fullmatch(r"[A-Za-z0-9_.\-]+", up_param):
             generators = {str(r["categories"]["generator"]) for r in runs
@@ -305,6 +305,10 @@ def main(root: str | None = None) -> None:
                 run.add_artifact(path, role="raw", profile=profile); run.finish(); st.success("已登记；刷新筛选即可查看。"); st.rerun()
             except Exception as exc: st.error(f"导入失败：{exc}")
     if not runs: st.info("Catalog 为空，请先使用上面的导入表单。"); return
+    dedicated = next((r for r in runs if r["run_id"] == pick), None) \
+        if pick and re.fullmatch(r"[A-Za-z0-9_\-]+", pick) else None
+    if pick and dedicated is None:
+        st.warning(f"未找到运行 {pick}，已回到首页。")
     with st.sidebar:
         def choices(field): return ["全部", *sorted({str(r.get(field)) for r in runs if r.get(field) not in (None, "")})]
         sample = st.selectbox("样品", choices("sample"))
@@ -322,176 +326,189 @@ def main(root: str | None = None) -> None:
             facet_values[key] = st.selectbox(f"分类 · {key}", ["全部", *sorted(cat_keys[key])], key=f"facet_{key}")
         only_favorites = st.checkbox("⭐ 只看收藏", value=False, key="only_favorites")
     scalar = {k: v for k, v in {"sample": sample, "kind": kind, "execution_status": status}.items() if v != "全部"}
-    def _facet_ok(r):
-        for key, chosen in facet_values.items():
-            if chosen == "全部": continue
-            c = r.get("categories")
-            if not (isinstance(c, dict) and str(c.get(key)) == chosen): return False
-        return True
-    # ── 顶栏：搜索（Bilibili 式居中）+ 排序 + 视图切换 ──
-    top_a, top_b = st.columns([3, 2])
-    with top_a:
-        query = st.text_input("搜索标题 / 描述 / 标签", placeholder="搜索 run / 脚本 / 目录…")
-    with top_b:
-        sort_view = st.columns(2)
-        with sort_view[0]:
-            order = st.selectbox("排序", ["最新优先", "最早优先", "文件最多"], label_visibility="collapsed")
-        with sort_view[1]:
-            view = st.radio("视图", ["卡片", "表格"], horizontal=True, label_visibility="collapsed")
-    # ── 分区导航行：项目频道（Bilibili 频道栏），按 run 数取前 15 ──
-    project_counts: dict[str, int] = {}
-    for r in runs:
-        if r.get("project"):
-            project_counts[r["project"]] = project_counts.get(r["project"], 0) + 1
-    channel = None
-    if len(project_counts) > 1:
-        top_projects = sorted(project_counts, key=lambda p: -project_counts[p])[:15]
-        channel = st.pills("分区", sorted(top_projects), default=None, label_visibility="collapsed", wrap=True)
-        if len(project_counts) > 15:
-            with st.expander(f"📺 全部分区（{len(project_counts)} 个）"):
-                all_channel = st.pills("全部分区", sorted(project_counts), default=None,
-                                       key="channel_all", label_visibility="collapsed", wrap=True)
-                if all_channel:
-                    channel = all_channel
-    # UP 主筛选（点击卡片上的 UP 行进入；chip 可移除）
     up_filter = st.session_state.get("up_filter")  # {"field": "generator"|"project", "value": str}
-    if up_filter:
-        chip_a, _ = st.columns([1, 3])
-        if chip_a.button(f"UP · {up_filter['value']} ✕", key="up_filter_chip",
-                         type="primary", use_container_width=False):
-            st.session_state.pop("up_filter", None)
-            try:
-                del st.query_params["up"]
-            except Exception:
-                pass
-            st.rerun()
-    base = [r for r in runs
-            if all(r.get(k) == v for k, v in scalar.items())
-            and _facet_ok(r)
-            and (not channel or r.get("project") == channel)
-            and (not up_filter or (
-                (up_filter["field"] == "generator" and isinstance(r.get("categories"), dict)
-                 and str(r["categories"].get("generator")) == up_filter["value"])
-                or (up_filter["field"] == "project" and r.get("project") == up_filter["value"])))]
-    collections = sorted({str(r["categories"]["collection"]) for r in base
-                          if isinstance(r.get("categories"), dict) and r.get("categories", {}).get("collection") is not None})
-    if 1 < len(collections) <= 12:
-        zone = st.pills("收藏夹分区", ["全部", *collections], default="全部", label_visibility="collapsed")
-        if zone and zone != "全部":
-            base = [r for r in base if isinstance(r.get("categories"), dict)
-                    and str(r["categories"].get("collection")) == zone]
-    needle = query.casefold()
-    if only_favorites:
-        favs = set(Interactions(root).favorites())
-        base = [r for r in base if r["run_id"] in favs]
-    filtered = [r for r in base
-                if (not needle or needle in json.dumps(r, ensure_ascii=False, default=str).casefold())]
-    reverse = order != "最早优先"
-    if order == "文件最多":
-        filtered.sort(key=lambda r: ((r.get("parameters") or {}).get("file_count") or 0, r.get("created_at") or ""), reverse=True)
+    if dedicated is not None:
+        # ── 专属视频页（Bilibili BV 页）：整页只显示这组数据 ──
+        st.markdown("<a href='/' style='text-decoration:none;font-size:15px'>← 返回首页</a>",
+                    unsafe_allow_html=True)
+        related6 = sorted((r for r in runs
+                           if r.get("project") == dedicated.get("project") and r["run_id"] != dedicated["run_id"]),
+                          key=lambda r: r.get("created_at") or "", reverse=True)[:6]
+        compare_ids = [rid for rid in (st.session_state.get("compare_ids") or []) if rid != dedicated["run_id"]]
+        by_id = {r["run_id"]: r for r in runs}
+        filtered = [dedicated, *related6, *[by_id[rid] for rid in compare_ids if rid in by_id]]
+        picked, view, order = [], "卡片", "最新优先"
     else:
-        filtered.sort(key=lambda r: r.get("created_at") or "", reverse=reverse)
-    st.write(f"找到 **{len(filtered)}** 个数据运行")
-    if not filtered: st.info("调整筛选条件即可浏览数据。"); return
+        def _facet_ok(r):
+            for key, chosen in facet_values.items():
+                if chosen == "全部": continue
+                c = r.get("categories")
+                if not (isinstance(c, dict) and str(c.get(key)) == chosen): return False
+            return True
+        # ── 顶栏：搜索（Bilibili 式居中）+ 排序 + 视图切换 ──
+        top_a, top_b = st.columns([3, 2])
+        with top_a:
+            query = st.text_input("搜索标题 / 描述 / 标签", placeholder="搜索 run / 脚本 / 目录…")
+        with top_b:
+            sort_view = st.columns(2)
+            with sort_view[0]:
+                order = st.selectbox("排序", ["最新优先", "最早优先", "文件最多"], label_visibility="collapsed")
+            with sort_view[1]:
+                view = st.radio("视图", ["卡片", "表格"], horizontal=True, label_visibility="collapsed")
+        # ── 分区导航行：项目频道（Bilibili 频道栏），按 run 数取前 15 ──
+        project_counts: dict[str, int] = {}
+        for r in runs:
+            if r.get("project"):
+                project_counts[r["project"]] = project_counts.get(r["project"], 0) + 1
+        channel = None
+        if len(project_counts) > 1:
+            top_projects = sorted(project_counts, key=lambda p: -project_counts[p])[:15]
+            channel = st.pills("分区", sorted(top_projects), default=None, label_visibility="collapsed", wrap=True)
+            if len(project_counts) > 15:
+                with st.expander(f"📺 全部分区（{len(project_counts)} 个）"):
+                    all_channel = st.pills("全部分区", sorted(project_counts), default=None,
+                                           key="channel_all", label_visibility="collapsed", wrap=True)
+                    if all_channel:
+                        channel = all_channel
+        # UP 主筛选（点击卡片上的 UP 行进入；chip 可移除）
+        if up_filter:
+            chip_a, _ = st.columns([1, 3])
+            if chip_a.button(f"UP · {up_filter['value']} ✕", key="up_filter_chip",
+                             type="primary", use_container_width=False):
+                st.session_state.pop("up_filter", None)
+                try:
+                    del st.query_params["up"]
+                except Exception:
+                    pass
+                st.rerun()
+        base = [r for r in runs
+                if all(r.get(k) == v for k, v in scalar.items())
+                and _facet_ok(r)
+                and (not channel or r.get("project") == channel)
+                and (not up_filter or (
+                    (up_filter["field"] == "generator" and isinstance(r.get("categories"), dict)
+                     and str(r["categories"].get("generator")) == up_filter["value"])
+                    or (up_filter["field"] == "project" and r.get("project") == up_filter["value"])))]
+        collections = sorted({str(r["categories"]["collection"]) for r in base
+                              if isinstance(r.get("categories"), dict) and r.get("categories", {}).get("collection") is not None})
+        if 1 < len(collections) <= 12:
+            zone = st.pills("收藏夹分区", ["全部", *collections], default="全部", label_visibility="collapsed")
+            if zone and zone != "全部":
+                base = [r for r in base if isinstance(r.get("categories"), dict)
+                        and str(r["categories"].get("collection")) == zone]
+        needle = query.casefold()
+        if only_favorites:
+            favs = set(Interactions(root).favorites())
+            base = [r for r in base if r["run_id"] in favs]
+        filtered = [r for r in base
+                    if (not needle or needle in json.dumps(r, ensure_ascii=False, default=str).casefold())]
+        reverse = order != "最早优先"
+        if order == "文件最多":
+            filtered.sort(key=lambda r: ((r.get("parameters") or {}).get("file_count") or 0, r.get("created_at") or ""), reverse=True)
+        else:
+            filtered.sort(key=lambda r: r.get("created_at") or "", reverse=reverse)
+        st.write(f"找到 **{len(filtered)}** 个数据运行")
+        if not filtered: st.info("调整筛选条件即可浏览数据。"); return
 
-    picked = []
-    if view == "卡片":
-        # ── Bilibili 式布局：左侧卡片墙，右侧排行榜/我的收藏 ──
-        wall_col, rank_col = st.columns([4, 1.05])
-        with wall_col:
-            PAGE = 12
-            num_pages = max(1, -(-len(filtered) // PAGE))
-            page = st.pagination(num_pages, key="cards_page", max_visible_pages=7)
-            page_runs = filtered[(page - 1) * PAGE: page * PAGE]
-            card_rows = [st.columns(4) for _ in range(-(-len(page_runs) // 4))]
-        for idx, r in enumerate(page_runs):
-            with card_rows[idx // 4][idx % 4]:
-                fc = (r.get("parameters") or {}).get("file_count")
-                badge = (f"{human_count(fc)}文件" if fc is not None else
-                         (f"{human_count((r.get('parameters') or {}).get('total_bytes', 0) / 1e6)}MB"
-                          if (r.get("parameters") or {}).get("total_bytes") else ""))
-                png, mode = _cover_png(str(root), r["run_id"], badge,
-                                       fp_key=json.dumps(r.get("parameters") or {}, sort_keys=True, default=str))
-                href = f"?pick={r['run_id']}" + (f"&up={quote(up_filter['value'], safe='')}" if up_filter else "")
-                title_html = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
-                if png:
-                    img = (f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}")
-                    st.markdown(f"<a href='{href}' style='text-decoration:none'>"
-                                f"<img src='{img}' style='width:100%;border-radius:8px;display:block' "
-                                f"title='{title_html}'/></a>", unsafe_allow_html=True)
-                else:
-                    fmt = str((r.get("kind") or "run"))[:6]
-                    chip = (f"<span style='background:#333;border-radius:4px;padding:1px 6px;font-size:12px;'>{badge or fmt}</span>"
-                            if badge else fmt)
-                    st.markdown(f"<a href='{href}' style='text-decoration:none'>"
-                                f"<div style='height:{int(180*0.56)}px;border-radius:8px;background:#17171f;"
-                                f"display:flex;align-items:center;justify-content:center;gap:8px;color:#666;"
-                                f"font-size:22px;'>📊 {chip}</div></a>", unsafe_allow_html=True)
-                if mode == "fingerprint":
-                    st.caption("¶ 参数指纹封面")
-                cats = r.get("categories") if isinstance(r.get("categories"), dict) else {}
-                up = cats.get("generator") or cats.get("site") or r.get("project") or ""
-                stats = []
-                if fc is not None:
-                    stats.append(f"▶ {human_count(fc)}")
-                n_comments = social.state(r["run_id"])["comments"]
-                if n_comments:
-                    stats.append(f"💬 {n_comments}")
-                if social.state(r["run_id"])["liked"]:
-                    stats.append("👍")
-                meta = " · ".join([*stats, (r.get("created_at") or "")[:10]])
-                if social.is_favorite(r["run_id"]):
-                    meta = "⭐ " + meta
-                st.caption(meta)
-                st.markdown(f"<a href='{href}' style='color:inherit;font-weight:600;font-size:14px;"
-                            f"text-decoration:none'>{title_html[:44]}</a>", unsafe_allow_html=True)
-                up_value = str(cats.get("generator") or r.get("project") or "")
-                if up_value:
-                    up_html = up_value.replace("&", "&amp;").replace("<", "&lt;")[:26]
-                    st.markdown(f"<a href='?up={quote(up_value, safe= '')}' "
-                                f"style='color:#99a2aa;font-size:12px;text-decoration:none'>UP · {up_html}</a>",
+        picked = []
+        if view == "卡片":
+            # ── Bilibili 式布局：左侧卡片墙，右侧排行榜/我的收藏 ──
+            wall_col, rank_col = st.columns([4, 1.05])
+            with wall_col:
+                PAGE = 12
+                num_pages = max(1, -(-len(filtered) // PAGE))
+                page = st.pagination(num_pages, key="cards_page", max_visible_pages=7)
+                page_runs = filtered[(page - 1) * PAGE: page * PAGE]
+                card_rows = [st.columns(4) for _ in range(-(-len(page_runs) // 4))]
+            for idx, r in enumerate(page_runs):
+                with card_rows[idx // 4][idx % 4]:
+                    fc = (r.get("parameters") or {}).get("file_count")
+                    badge = (f"{human_count(fc)}文件" if fc is not None else
+                             (f"{human_count((r.get('parameters') or {}).get('total_bytes', 0) / 1e6)}MB"
+                              if (r.get("parameters") or {}).get("total_bytes") else ""))
+                    png, mode = _cover_png(str(root), r["run_id"], badge,
+                                           fp_key=json.dumps(r.get("parameters") or {}, sort_keys=True, default=str))
+                    href = f"?pick={r['run_id']}" + (f"&up={quote(up_filter['value'], safe='')}" if up_filter else "")
+                    title_html = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
+                    if png:
+                        img = (f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}")
+                        st.markdown(f"<a href='{href}' style='text-decoration:none'>"
+                                    f"<img src='{img}' style='width:100%;border-radius:8px;display:block' "
+                                    f"title='{title_html}'/></a>", unsafe_allow_html=True)
+                    else:
+                        fmt = str((r.get("kind") or "run"))[:6]
+                        chip = (f"<span style='background:#333;border-radius:4px;padding:1px 6px;font-size:12px;'>{badge or fmt}</span>"
+                                if badge else fmt)
+                        st.markdown(f"<a href='{href}' style='text-decoration:none'>"
+                                    f"<div style='height:{int(180*0.56)}px;border-radius:8px;background:#17171f;"
+                                    f"display:flex;align-items:center;justify-content:center;gap:8px;color:#666;"
+                                    f"font-size:22px;'>📊 {chip}</div></a>", unsafe_allow_html=True)
+                    if mode == "fingerprint":
+                        st.caption("¶ 参数指纹封面")
+                    cats = r.get("categories") if isinstance(r.get("categories"), dict) else {}
+                    up = cats.get("generator") or cats.get("site") or r.get("project") or ""
+                    stats = []
+                    if fc is not None:
+                        stats.append(f"▶ {human_count(fc)}")
+                    n_comments = social.state(r["run_id"])["comments"]
+                    if n_comments:
+                        stats.append(f"💬 {n_comments}")
+                    if social.state(r["run_id"])["liked"]:
+                        stats.append("👍")
+                    meta = " · ".join([*stats, (r.get("created_at") or "")[:10]])
+                    if social.is_favorite(r["run_id"]):
+                        meta = "⭐ " + meta
+                    st.caption(meta)
+                    st.markdown(f"<a href='{href}' style='color:inherit;font-weight:600;font-size:14px;"
+                                f"text-decoration:none'>{title_html[:44]}</a>", unsafe_allow_html=True)
+                    up_value = str(cats.get("generator") or r.get("project") or "")
+                    if up_value:
+                        up_html = up_value.replace("&", "&amp;").replace("<", "&lt;")[:26]
+                        st.markdown(f"<a href='?up={quote(up_value, safe= '')}' "
+                                    f"style='color:#99a2aa;font-size:12px;text-decoration:none'>UP · {up_html}</a>",
+                                    unsafe_allow_html=True)
+            with rank_col:
+                # ── 排行榜（Bilibili 右侧栏）：热播=文件最多 TOP10；下方我的收藏 ──
+                def _link(r, i):
+                    mark = "🔥" if i <= 3 else f"{i}."
+                    t = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
+                    fc = (r.get("parameters") or {}).get("file_count")
+                    return (f"<div style='margin-bottom:6px'><a href='?pick={r['run_id']}' "
+                            f"style='color:inherit;text-decoration:none;font-size:13px'>"
+                            f"{mark} {t[:20]}</a>"
+                            + (f"<div style='color:#99a2aa;font-size:11px'>▶ {human_count(fc)}</div>" if fc is not None else "")
+                            + "</div>")
+                st.markdown("**🔥 排行榜 · 热播（文件最多）**")
+                hot = sorted(filtered, key=lambda r: ((r.get("parameters") or {}).get("file_count") or 0,
+                                                      r.get("created_at") or ""), reverse=True)[:10]
+                st.markdown("".join(_link(r, i) for i, r in enumerate(hot, 1)), unsafe_allow_html=True)
+                fav_ids = [rid for rid in social.favorites()
+                           if any(r["run_id"] == rid for r in filtered)]
+                if fav_ids:
+                    st.markdown("**⭐ 我的收藏**")
+                    by_id = {r["run_id"]: r for r in filtered}
+                    st.markdown("".join(_link(by_id[rid], i) for i, rid in enumerate(fav_ids[:10], 1)),
                                 unsafe_allow_html=True)
-        with rank_col:
-            # ── 排行榜（Bilibili 右侧栏）：热播=文件最多 TOP10；下方我的收藏 ──
-            def _link(r, i):
-                mark = "🔥" if i <= 3 else f"{i}."
-                t = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
-                fc = (r.get("parameters") or {}).get("file_count")
-                return (f"<div style='margin-bottom:6px'><a href='?pick={r['run_id']}' "
-                        f"style='color:inherit;text-decoration:none;font-size:13px'>"
-                        f"{mark} {t[:20]}</a>"
-                        + (f"<div style='color:#99a2aa;font-size:11px'>▶ {human_count(fc)}</div>" if fc is not None else "")
-                        + "</div>")
-            st.markdown("**🔥 排行榜 · 热播（文件最多）**")
-            hot = sorted(filtered, key=lambda r: ((r.get("parameters") or {}).get("file_count") or 0,
-                                                  r.get("created_at") or ""), reverse=True)[:10]
-            st.markdown("".join(_link(r, i) for i, r in enumerate(hot, 1)), unsafe_allow_html=True)
-            fav_ids = [rid for rid in social.favorites()
-                       if any(r["run_id"] == rid for r in filtered)]
-            if fav_ids:
-                st.markdown("**⭐ 我的收藏**")
-                by_id = {r["run_id"]: r for r in filtered}
-                st.markdown("".join(_link(by_id[rid], i) for i, rid in enumerate(fav_ids[:10], 1)),
-                            unsafe_allow_html=True)
-            st.caption("点击条目直接进入")
-    else:
-        # 表格视图（点列头可排序，点行选中）
-        def _row(r):
-            row = {"时间": (r.get("created_at") or "")[:19].replace("T", " "), "项目": r.get("project") or "",
-                   "标题": r.get("title") or r.get("run_id"), "类型": r.get("kind") or "",
-                   "状态": r.get("execution_status") or "",
-                   "标签": " · ".join(r.get("tags") or [])}
-            file_count = (r.get("parameters") or {}).get("file_count")
-            if file_count is not None: row["文件数"] = file_count
-            return row
-        table_rows = [_row(r) for r in filtered]
-        try:
-            table = st.dataframe(table_rows, selection_mode="single-row", on_select="rerun",
-                                 key="runs_table", hide_index=True, use_container_width=True, height=420)
-            picked = list(getattr(getattr(table, "selection", None), "rows", []) or [])
-        except TypeError:
-            picked = []
-    if len(filtered) <= 300:
+                st.caption("点击条目直接进入")
+        else:
+            # 表格视图（点列头可排序，点行选中）
+            def _row(r):
+                row = {"时间": (r.get("created_at") or "")[:19].replace("T", " "), "项目": r.get("project") or "",
+                       "标题": r.get("title") or r.get("run_id"), "类型": r.get("kind") or "",
+                       "状态": r.get("execution_status") or "",
+                       "标签": " · ".join(r.get("tags") or [])}
+                file_count = (r.get("parameters") or {}).get("file_count")
+                if file_count is not None: row["文件数"] = file_count
+                return row
+            table_rows = [_row(r) for r in filtered]
+            try:
+                table = st.dataframe(table_rows, selection_mode="single-row", on_select="rerun",
+                                     key="runs_table", hide_index=True, use_container_width=True, height=420)
+                picked = list(getattr(getattr(table, "selection", None), "rows", []) or [])
+            except TypeError:
+                picked = []
+    if not filtered: st.info("调整筛选条件即可浏览数据。"); return
+    if len(filtered) <= 300 and dedicated is None:
         options = {f"{r.get('title', r.get('run_id'))} · {r.get('run_id')}": r for r in filtered}
         selected = st.multiselect("选择运行（可多选比较）", list(options), default=list(options)[:1])
         if not selected: st.info("请选择至少一个运行。"); return
