@@ -26,6 +26,8 @@ def test_streamlit_app_loads_catalog_and_renders_plot(tmp_path, monkeypatch):
     app = AppTest.from_file(Path(__file__).parents[1] / "src" / "research_data" / "app.py").run()
     next(item for item in app.text_input if item.key == "catalog_root").set_value(str(tmp_path / "catalog"))
     app.run()
+    app.query_params["pick"] = run.run_id
+    app.run()
     next(button for button in app.button if button.label == "加载所选运行").click()
     app.run()
     assert not list(app.exception)
@@ -64,8 +66,11 @@ def test_recipe_compare_live_style_registration_and_selection_reset(tmp_path, mo
     app = AppTest.from_file(Path(__file__).parents[1] / "src" / "research_data" / "app.py", default_timeout=20).run()
     def widget(collection, label):
         return next(item for item in collection if item.label == label or getattr(item, "key", None) == label)
-    selector = widget(app.multiselect, "选择运行（可多选比较）")
-    selector.set_value(selector.options).run()
+    app.query_params["pick"] = runs[0].run_id
+    app.run()
+    widget(app.button, "加入对比").click().run()
+    app.query_params["pick"] = runs[1].run_id
+    app.run()
     widget(app.button, "加载所选运行").click().run()
     widget(app.selectbox, "已保存配方").set_value("compare").run()
     widget(app.button, "载入配方").click().run()
@@ -82,8 +87,8 @@ def test_recipe_compare_live_style_registration_and_selection_reset(tmp_path, mo
     assert analysis["parameters"]["recipe"]["theme"] == "paper"
     assert analysis["parameters"]["recipe"]["style"]["line_width"] == 4.0
     assert analysis["parent_run_ids"] == [r.run_id for r in runs]
-    selector = widget(app.multiselect, "选择运行（可多选比较）")
-    selector.set_value(selector.options[:1]).run()
+    app.query_params["pick"] = runs[0].run_id  # 切到另一 run,选择集变化,figure 应被重置
+    app.run()
     assert "figure" not in app.session_state
     assert not app.exception
 
@@ -130,7 +135,8 @@ def test_project_templates_panels_profile_save_origin_and_live_style(tmp_path, m
     widget(app.selectbox, "项目 profile").set_value("custom").run()
     widget(app.button, "应用 profile").click().run()
     assert '"x": "x"' in widget(app.text_area, "mapping JSON").value
-    widget(app.multiselect, "选择运行（可多选比较）").set_value(widget(app.multiselect, "选择运行（可多选比较）").options).run()
+    app.query_params["pick"] = run.run_id
+    app.run()
     widget(app.button, "加载所选运行").click().run()
     widget(app.selectbox, "已保存配方").set_value("project:panel-template").run()
     widget(app.button, "应用模板").click().run()
@@ -196,12 +202,11 @@ def test_big_catalog_browse_basket_flow(tmp_path, monkeypatch):
         return next(item for item in collection
                     if item.label == label or getattr(item, "key", None) == label)
 
-    # 大目录路径：默认卡片墙（无巨型多选框）；切到表格视图后总列表挂载
-    assert not any(getattr(w, "label", "") == "选择运行（可多选比较）" for w in app.multiselect)
-    view_radio = next(r for r in app.radio
-                      if r.label == "视图" or "卡片" in (getattr(r, "options", None) or []))
-    view_radio.set_value("表格").run()
-    assert "runs_table" in app.session_state  # st.dataframe 总列表已挂载
+    # Bilibili 化:首页只有卡片墙;互动在视频页
+    assert not app.multiselect
+    newest = sorted(cat.list_runs_summary(), key=lambda r: r["created_at"])[-1]
+    app.query_params["pick"] = newest["run_id"]
+    app.run()
     assert widget(app.button, "加入对比")
     assert widget(app.button, "加载所选运行")
     # 默认自动选中最新一条；加入对比把当前 run 放进篮子（chip 出现）；
