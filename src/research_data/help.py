@@ -20,6 +20,8 @@ _INTENT = {
     "register": "Attach an existing file to a previously recorded run.",
     "import": "Register historical data while keeping unknown provenance explicit.",
     "finish": "Record execution outcome separately from scientific validation.",
+    "article": "Prepare and check the mandatory article describing a dataset, its formulas and managed figures.",
+    "submit": "Formally submit data only with a complete, integrity-checked article and frozen provenance receipt.",
     "review": "Agent review dispatch: list/show pending user-review requests and complete them.",
     "proof": "Compose editable Three Interact figures, freeze journal proofs, and review exact revisions.",
     "search": "Find runs by text, tags, classifications, or parameter filters.",
@@ -49,6 +51,8 @@ _EXAMPLES = {
     "start": "research-data start --title TITLE --repo SOURCE_ROOT --entrypoint SCRIPT --source SCRIPT",
     "register": "research-data register RUN_ID DATA_FILE --description DESCRIPTION --profile profile.json",
     "finish": "research-data finish RUN_ID --status completed",
+    "article": "research-data article template --run-id RUN_ID --output article.json",
+    "submit": "research-data submit RUN_ID --article article.json",
     "review": "research-data review complete --request-id ID --reply-file reply.md --validation partial",
     "show": "research-data show RUN_ID",
     "check": "research-data check RUN_ID",
@@ -78,7 +82,7 @@ _EXAMPLES = {
 
 _GROUPS = {
     "startup": ["open", "status", "stop", "serve", "browse"],
-    "data": ["init", "start", "run", "register", "import", "finish", "validation"],
+    "data": ["init", "start", "run", "register", "import", "finish", "article", "submit", "validation"],
     "search": ["search", "show", "check", "rebuild"],
     "review": ["review", "proof"],
     "plot": ["plot", "profile", "themes", "project"],
@@ -87,6 +91,13 @@ _GROUPS = {
 }
 
 _WORKFLOWS = {
+    "article": {
+        "purpose": "Every formally submitted dataset requires a structured article explaining the data, mathematics and illustrations.",
+        "steps": ["article", "submit", "proof"],
+        "decision": "Capture data first, create article template --run-id ID --output article.json, fill recorded facts and limitations, article save --file article.json, article check, then submit ID. Execution finish is capture completion; it does not formally submit a dataset.",
+        "example": _EXAMPLES["submit"],
+        "notes": ["Required title, summary, methods, results and limitations; every managed data artifact requires its own description and variable/unit/order explanation.", "Provide equations with raw LaTeX and symbol descriptions, or equation_note explaining nonapplicability. Provide same-run PNG/JPEG artifact IDs and captions, or figure_note explaining nonapplicability; do not invent formulas, pictures or missing units.", "Incomplete submit returns an error and retains captured files. Successful submit freezes article/input/source provenance; later edits or metadata/input changes require resubmission.", "article status is metadata-only; article check and submit verify current input bytes. Scientific validation remains a separate evidence-based status.", "The data page has 数据文章 for reading/editing, typography and self-contained HTML. In 文章排版 adopt the submitted article to use formulas and illustrations in a new proof.", "Supported offline display mathematics uses Matplotlib MathText, with UI extras installed; full TeX documents are outside this renderer."],
+    },
     "proof": {
         "purpose": "Compose figures in Three Interact, publish versioned journal-style proofs and review exact revisions.",
         "steps": ["open", "proof", "check"],
@@ -96,14 +107,14 @@ _WORKFLOWS = {
     },
     "generate": {
         "purpose": "Generate new data with source provenance and managed outputs.",
-        "steps": ["doctor", "init", "run", "check", "validation"],
+        "steps": ["doctor", "init", "run", "article", "submit", "check", "validation"],
         "decision": "Use run when an existing command creates files; use the Python Catalog API when generation is embedded in Python.",
         "example": _EXAMPLES["run"],
-        "notes": ["Write outputs to RESEARCH_DATA_OUTPUT.", "A successful process is not scientific validation."],
+        "notes": ["Write outputs to RESEARCH_DATA_OUTPUT.", "Before reporting data as submitted, complete the article workflow and return a verified submission revision; finish only records execution.", "A successful process is not scientific validation."],
     },
     "import": {
         "purpose": "Register historical data while preserving uncertainty about its origin.",
-        "steps": ["profile", "import", "check", "validation"],
+        "steps": ["profile", "import", "article", "submit", "check", "validation"],
         "decision": "Use a profile when variable names, units, or coordinates are known; retain unknown source identity when it is not.",
         "example": _EXAMPLES["import"],
         "notes": ["Do not infer physical meaning from shape alone.", "Use --repo/--source only when provenance is supported."],
@@ -137,7 +148,7 @@ _WORKFLOWS = {
         "steps": ["help", "guide", "doctor", "install-agent"],
         "decision": "Call help --json for parser-derived options and guide --json for workflow selection before mutating a catalog.",
         "example": _EXAMPLES["agent"],
-        "notes": ["Required flags are included in command option metadata.", "Wrapper runs expose RESEARCH_DATA_RUN_ID, RESEARCH_DATA_RUN_DIR, RESEARCH_DATA_OUTPUT, and RESEARCH_DATA_CATALOG."],
+        "notes": ["Required flags are included in command option metadata.", "Every formal data delivery requires a successful submit receipt. Follow guide article; raw registration or completed execution does not meet this condition.", "Wrapper runs expose RESEARCH_DATA_RUN_ID, RESEARCH_DATA_RUN_DIR, RESEARCH_DATA_OUTPUT, and RESEARCH_DATA_CATALOG."],
     },
 }
 
@@ -198,6 +209,9 @@ def command_catalog(parser: argparse.ArgumentParser, topic: str | None = None) -
         "exit_codes": {"0": "success", "1": "integrity check failed", "2": "invalid input or runtime error", "130": "foreground serve interrupted with Ctrl+C"},
         "wrapped_command_exit": "run propagates the wrapped program's exit code; consult execution_status for the recorded outcome",
         "groups": _GROUPS,
+        "formal_delivery": {"required_command": "submit", "required_receipt_schema": "research-data.article-submission.v1",
+                            "required_fields": ["run_id", "revision_id", "sha256", "article_sha256", "fingerprint"],
+                            "capture_is_submission": False},
     }
     return result
 
@@ -215,6 +229,7 @@ def workflow_guide(topic: str | None = None, machine: bool = False) -> dict[str,
     lines = ["ResearchData workflow guide", ""]
     for name, guide in selected.items():
         lines.extend([f"{name}: {guide['purpose']}", f"  Steps: {' -> '.join(guide['steps'])}", f"  Choose: {guide['decision']}", f"  Example: {guide['example']}", ""])
+        lines.extend(f"  - {note}" for note in guide.get('notes', []))
     return "\n".join(lines).rstrip()
 
 

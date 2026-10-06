@@ -112,6 +112,17 @@ def parser():
     finish.add_argument("run_id")
     finish.add_argument("--status", choices=["completed", "failed", "imported"], default="completed")
     finish.add_argument("--error")
+    article = command("article", "Write, check and inspect a required dataset article before formal submission")
+    article.add_argument("operation", choices=["template", "show", "save", "check", "status", "list", "revision"], nargs="?", default="show")
+    article.add_argument("--run-id", required=True)
+    article.add_argument("--file", help="Structured article JSON file for save or check")
+    article.add_argument("--expected-hash", help="Current article draft SHA-256 for concurrent edit protection")
+    article.add_argument("--revision", help="Frozen article revision id for revision")
+    article.add_argument("--output", help="Write article JSON to a UTF-8 file for local editing")
+    submit = command("submit", "Formally submit a dataset only after its article and input integrity checks pass")
+    submit.add_argument("run_id")
+    submit.add_argument("--article", help="Complete article JSON file; omit to submit the saved draft")
+    submit.add_argument("--expected-hash", help="Expected saved draft SHA-256")
     review = command("review", "Agent review dispatch: list/show pending user-review requests and complete them")
     review.add_argument("operation", choices=["list", "show", "complete"], nargs="?", default="list")
     review.add_argument("--request-id", help="Review request id (see review list)")
@@ -395,6 +406,35 @@ def main(argv=None):
             _emit(run.manifest)
         elif args.action == "finish":
             _emit(cat.finish_run(args.run_id, status=args.status, error=args.error))
+        elif args.action in {"article", "submit"}:
+            from .articles import ArticleStore
+            store = ArticleStore(cat.root)
+            if args.action == "submit":
+                result = store.submit(args.run_id, _json(args.article) if args.article else None, expected_hash=args.expected_hash)
+            elif args.operation == "template":
+                result = store.template(args.run_id)
+            elif args.operation == "show":
+                result = store.draft(args.run_id)
+            elif args.operation == "save":
+                if not args.file:
+                    raise ValueError("article save requires --file")
+                result = store.save(args.run_id, _json(args.file), expected_hash=args.expected_hash)
+            elif args.operation == "check":
+                result = store.check(args.run_id, _json(args.file) if args.file else None)
+            elif args.operation == "status":
+                result = store.status(args.run_id)
+            elif args.operation == "list":
+                result = store.revisions(args.run_id)
+            else:
+                if not args.revision:
+                    raise ValueError("article revision requires --revision")
+                result = store.get_revision(args.run_id, args.revision)
+            if args.action == "article" and args.output:
+                document = result.get("article", result) if isinstance(result, dict) else result
+                Path(args.output).write_text(json.dumps(document, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+            _emit(result)
+            if args.action == "article" and args.operation == "check" and not result["ok"]:
+                return 2
         elif args.action == "review":
             from . import review as review_api
             if args.operation == "list":

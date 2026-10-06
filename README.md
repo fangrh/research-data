@@ -38,6 +38,7 @@ ResearchData 借鉴 QCoDeS 的实验/run、参数、数据集与来源记录方�
 - 0.5.1 根据两个独立 agent 的实际使用改进入口、版本导航、保存进度、运行版本和命令指南；反馈与验证见 [使用评审](docs/AGENT-REVIEW.md)。
 - 0.5.2 将图形编辑、文章排版与校样审阅整合为同一个工作区，统一浅色外观与工具栏；参考网站、使用说明与截图见 [统一工作区](docs/UNIFIED_WORKSPACE.md)。
 - 0.5.3 增加校样文字定位、图中编号和线程的解决/重开操作，旧校样保持冻结；见 [定位校样与意见处理](docs/PROOF_REVIEW.md)。
+- 0.6 增加数据文章模板、完整性检查和带 receipt/revision 的正式提交；公式使用离线 MathText，受管 PNG/JPEG 图和文章可带入新校样；见 [数据文章与正式提交](docs/ARTICLES.md)。
 
 ## 安装并打开
 
@@ -65,7 +66,8 @@ Windows 也可运行 `./scripts/setup.ps1 -Agent -Catalog D:/research-data-libra
 安装后可用 `research-data help` 查看当前命令。`research-data help COMMAND --json`
 输出由实际 argparse parser 生成的选项、必填参数、默认值和示例，适合脚本与
 coding agent；`research-data guide WORKFLOW --json` 输出 `generate`、`import`、
-`plot`、`browse` 或 `agent` 的工作流决策图。人类可省略 `--json` 获得可读说明。
+`plot`、`article`、`browse` 或 `agent` 的工作流决策图。人类可省略 `--json`
+获得可读说明。
 
 ```text
 research-data.cmd open
@@ -121,6 +123,8 @@ catalog.set_validation(run.run_id, "partial", evidence=["validation-report.md"],
 ```
 
 `passed` 要求提供证据，软件不会判断科学结论正确与否。
+
+正式提交还需要数据文章。`run`/`finish` 会保留执行输出，但不构成提交；使用 `article template --run-id RUN_ID --output article.json`，编辑后依次运行 `article save --run-id RUN_ID --file article.json`、`article check --run-id RUN_ID` 和 `submit RUN_ID --article article.json`。交付给 agent 或其他正式消费者时，返回成功 receipt 中的 `run_id`、`revision_id` 和外层返回值中的 receipt 路径；缺少文章、完整性检查或 receipt 时不要称为已提交。`article status` 是便宜的草稿/manifest 元数据检查（`integrity_checked` 为 false），原始文件字节修改要用 `article check` 或 `submit` 重新验哈希。完整字段、公式/图的非适用说明和陈旧草稿规则见 [docs/ARTICLES.md](docs/ARTICLES.md)。
 
 ## 包装 Python / Julia / 其他程序
 

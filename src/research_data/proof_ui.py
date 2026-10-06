@@ -123,6 +123,20 @@ def render(st, catalog, run):
             else:
                 _canvas(st, store, catalog, run, rid, prefix, draft, saved_error)
         with article_tab:
+            from .articles import ArticleStore
+            from .article_ui import apply_to_proof
+            article_state = ArticleStore(catalog.root).status(rid)
+            st.caption('数据文章：' + {'draft': '待补充并提交', 'stale': '有更新，需要重新提交', 'submitted': '已提交'}[article_state['status']])
+            from .ui import browse_url
+            article_url = html.escape(browse_url(dict(st.query_params), pick=rid) + '&view=article', quote=True)
+            st.markdown(f'<a href="{article_url}" target="_self">打开数据文章 · 方法、公式与插图</a>', unsafe_allow_html=True)
+            if draft is not None and article_state['status'] == 'submitted' and st.button('采用已提交的数据文章', key=prefix + 'adopt_article'):
+                try:
+                    apply_to_proof(catalog, rid)
+                    st.session_state[prefix + 'article_notice'] = '已采用数据文章、公式与插图；生成校样时冻结这些内容。'
+                    st.rerun()
+                except Exception as exc:
+                    st.error(str(exc))
             if draft is None:
                 st.info("先在「图形编辑」中创建草稿，再填写文章内容。")
             else:
@@ -150,7 +164,7 @@ def _article(st, store, rid, prefix, draft):
                               format_func=lambda value: "单栏 · 研究校样" if value == "single" else "双栏 · 期刊校样")
         if st.form_submit_button("保存文章内容"):
             payload = copy.deepcopy(draft)
-            payload["document"] = dict(title=title, authors=authors, abstract=abstract, body=body, caption=caption, layout=layout)
+            payload["document"] = {**doc, **dict(title=title, authors=authors, abstract=abstract, body=body, caption=caption, layout=layout)}
             try:
                 store.save_draft(rid, payload, expected_hash=draft["hash"])
                 st.session_state[prefix + "notice"] = "文章内容已保存 · 图形编辑自动保存"
@@ -245,6 +259,12 @@ def _review(st, store, rid, prefix, revisions):
     scene = json.loads((folder / "scene.json").read_text(encoding="utf-8"))
     anchors = ["document", "title", "abstract", "body", "caption", "figure", *["element:" + key for key in scene["elements"]]]
     labels = dict(document="整份校样", title="标题", abstract="摘要", body="正文", caption="图注", figure="Figure 1")
+    document = json.loads((folder / 'document.json').read_text(encoding='utf-8'))
+    labels.update({f'equation:{i}': f'公式 {i + 1}' for i in range(len(document.get('equations', [])))})
+    for i in range(len(document.get('illustrations', []))):
+        labels[f'illustration:{i}'] = f'补充插图 {i + 1}'
+        labels[f'illustration-caption:{i}'] = f'补充插图 {i + 1} 图注'
+    anchors.extend(anchor for anchor in labels if anchor not in anchors)
     labels.update({"element:" + key: "图形元素 · " + value.get("name", key) for key, value in scene["elements"].items()})
     preview, discussion = st.columns([2.1, 1], gap="large")
     with preview:
@@ -317,11 +337,15 @@ def _review(st, store, rid, prefix, revisions):
             if st.button("清除定位", key=review_key + "clear_selection"):
                 st.session_state.pop(selection_key, None)
                 st.rerun()
-        with st.form(prefix + selected + "comment_form", clear_on_submit=False):
+        if selection:
+            anchor = selection['anchor']
+            st.caption('新意见将记录到上方已选择的位置；点击「清除定位」可改用其他位置。')
+        else:
             anchor = st.selectbox("评论位置", anchors, format_func=labels.get, key=review_key + "anchor")
-            reply = st.selectbox("回复评论", [None, *[c["id"] for c in comments]], key=review_key + "reply", placeholder="新评论",
-                                 format_func=lambda value: "新评论" if value is None else next(c["text"][:50] for c in comments if c["id"] == value))
-            st.caption("回复沿用原线程的位置；向已解决线程回复会重新打开它。")
+        reply = st.selectbox("回复评论", [None, *[c["id"] for c in comments]], key=review_key + "reply", placeholder="新评论",
+                             format_func=lambda value: "新评论" if value is None else next(c["text"][:50] for c in comments if c["id"] == value))
+        st.caption("回复沿用原线程的位置；向已解决线程回复会重新打开它。")
+        with st.form(prefix + selected + "comment_form", clear_on_submit=False):
             text = st.text_area("校样评论", height=90, key=review_key + "text")
             if st.form_submit_button("提交校样评论"):
                 try:

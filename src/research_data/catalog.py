@@ -107,6 +107,9 @@ class Run:
         self.manifest = self.catalog._manifest(self.run_id)
         return result
     def finish(self, status="completed", error=None): self.manifest = self.catalog.finish_run(self.run_id, status, error); return self
+    def submit(self, article=None, expected_hash=None):
+        from .articles import ArticleStore
+        return ArticleStore(self.catalog.root).submit(self.run_id, article, expected_hash=expected_hash)
     def __enter__(self): return self
     def __exit__(self, typ, value, tb):
         if typ:
@@ -165,7 +168,8 @@ class Catalog:
             c.execute("INSERT OR REPLACE INTO runs VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (m["run_id"],m["title"],m["project"],m.get("sample"),m["kind"],m["execution_status"],m["validation"]["status"],m["created_at"],m["updated_at"],f"runs/{m['run_id']}/manifest.json",json.dumps(m["tags"]),json.dumps(m["categories"]),json.dumps(m["parameters"]),m["description"]))
             cats = m.get("categories", {})
             cat_text = " ".join(str(k) + "=" + str(v) for k,v in cats.items()) if isinstance(cats, dict) else " ".join(map(str, cats))
-            c.execute("DELETE FROM runs_fts WHERE run_id=?", (m["run_id"],)); c.execute("INSERT INTO runs_fts VALUES (?,?,?,?,?,?,?)", (m["run_id"],m["title"],m["description"],m["project"],m.get("sample") or "", " ".join(map(str,m["tags"])), cat_text))
+            article_text = m.get("article_submission", {}).get("search_text", "")
+            c.execute("DELETE FROM runs_fts WHERE run_id=?", (m["run_id"],)); c.execute("INSERT INTO runs_fts VALUES (?,?,?,?,?,?,?)", (m["run_id"],m["title"],m["description"] + " " + article_text,m["project"],m.get("sample") or "", " ".join(map(str,m["tags"])), cat_text))
             c.execute("DELETE FROM artifacts WHERE run_id=?", (m["run_id"],))
             for a in m["artifacts"]: c.execute("INSERT INTO artifacts VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", (a["artifact_id"],m["run_id"],a["path"],a["original_name"],a["role"],a["description"],a["sha256"],a["size_bytes"],a["format"],json.dumps(a.get("variables",[])),json.dumps(a.get("profile")),json.dumps(a.get("metadata",{}))))
     def register_artifact(self, run_id, path, role="raw", description="", variables=None, profile=None, copy=True, metadata=None):
@@ -320,7 +324,10 @@ class Catalog:
                 rows = [r for r in rows if match(r)]
         if query:
             needle = query.casefold()
-            rows = [r for r in rows if needle in json.dumps(r, ensure_ascii=False, default=str).casefold()]
+            with self._connect() as c:
+                safe = '"' + query.replace('"', '""') + '"'
+                matched = {row[0] for row in c.execute("SELECT run_id FROM runs_fts WHERE runs_fts MATCH ?", (safe,))}
+            rows = [r for r in rows if r.get("run_id") in matched or needle in json.dumps(r, ensure_ascii=False, default=str).casefold()]
         return sorted(rows, key=lambda x: x.get("created_at") or "")
     def rebuild_index(self):
         with self._connect() as c: c.execute("DELETE FROM runs"); c.execute("DELETE FROM runs_fts"); c.execute("DELETE FROM artifacts")

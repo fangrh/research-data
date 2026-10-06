@@ -39,7 +39,7 @@ def _git(root: Path, *args: str) -> str | None:
 def environment_info() -> dict:
     versions = {}
     installed_distributions = {}
-    for package in ("research-data", "numpy", "pandas", "xarray", "plotly", "h5py", "streamlit", "qcodes", "pyarrow", "kaleido"):
+    for package in ("research-data", "numpy", "pandas", "xarray", "plotly", "h5py", "streamlit", "qcodes", "pyarrow", "kaleido", "matplotlib", "reportlab", "Pillow"):
         try:
             installed = importlib.metadata.version(package)
             installed_distributions[package] = installed

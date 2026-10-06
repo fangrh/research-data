@@ -1,5 +1,27 @@
 # Shared implementation contract
 
+## Structured data articles (v0.6)
+
+`ArticleStore(root)` owns `template`, `draft`, `save(expected_hash=...)`, `check`,
+`submit(expected_hash=...)`, `status`, `revisions` and `get_revision`. The article
+schema is `research-data.article.v1`; see [ARTICLES.md](docs/ARTICLES.md) for fields.
+`Run.submit(article)` runs after execution has finished. Missing explanations,
+omitted data artifacts, invalid equations/images or mismatched managed bytes
+reject formal submission while retaining captured data.
+
+Successful receipts freeze article content, input identities, source provenance
+and parameter metadata. Cheap status reports draft/manifest staleness and
+`integrity_checked: false`; check/submit verify current data bytes. The durable
+manifest registry anchors old and latest receipt hashes. Submitted article text,
+dataset explanations and formula/figure captions enter the search index.
+
+Article adoption updates the existing proof draft's document and verified input
+list while retaining its editable scene. Proof publication verifies the article
+revision reference and freezes copies of the source article/receipt, equation
+PNG/SVG and managed illustrations. Comments can use `equation:0`,
+`illustration:0` (normalized points), or `illustration-caption:0` (text offsets)
+in the exact frozen revision. Existing proof anchors remain valid.
+
 ## Project templates and presentation (v0.2)
 
 `ProjectTemplates(directory)` reads inert research-data.project.json (schema

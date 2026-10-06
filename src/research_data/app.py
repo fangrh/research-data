@@ -660,29 +660,40 @@ def main(root: str | None = None) -> None:
 
     # ── 视频页布局：左侧数据卡+互动+评论，右侧相关推荐（Bilibili 式）──
     workspace_key = f"workspace_{run['run_id']}"
+    from research_data.articles import ArticleStore
+    has_article = ArticleStore(catalog.root).draft(run['run_id']) is not None
+    initial_workspace = '编辑与校样' if st.query_params.get('view') == 'proof' else '数据文章' if st.query_params.get('view') == 'article' or has_article else '数据与绘图'
     with st.container(key="rd_workspaces"):
         back, modes = st.columns([1, 5], vertical_alignment="center")
         back.markdown(f"<a class='rd-back' href='{home_url.replace('&', '&amp;')}' target='_self'>← 返回首页</a>", unsafe_allow_html=True)
         with modes:
-            workspace = st.segmented_control("工作区", ["数据与绘图", "编辑与校样"], default="编辑与校样" if st.query_params.get("view") == "proof" else "数据与绘图", key=workspace_key, label_visibility="collapsed")
+            workspace = st.segmented_control("工作区", ["数据文章", "数据与绘图", "编辑与校样"], default=initial_workspace, key=workspace_key, label_visibility="collapsed")
     proof_mode = workspace == "编辑与校样"
+    article_mode = workspace == '数据文章'
     if proof_mode:
         st.query_params["view"] = "proof"
+    elif article_mode:
+        st.query_params['view'] = 'article'
     elif "view" in st.query_params:
         del st.query_params["view"]
-    page_l, page_r = (st.container(), None) if proof_mode else st.columns([4, 1.3])
+    page_l, page_r = (st.container(), None) if proof_mode or article_mode else st.columns([4, 1.3])
     with page_l, st.container(key="rd_detail"):
         if proof_mode:
             from research_data.proof_ui import render as render_proof_ui
             render_proof_ui(st, catalog, run)
+        elif article_mode:
+            from research_data.article_ui import render as render_article
+            render_article(st, catalog, run)
         else:
             st.markdown(detail_html(run), unsafe_allow_html=True)
+            state = ArticleStore(catalog.root).status(run['run_id'])
+            st.caption('数据提交：' + {'draft': '待补充文章', 'stale': '需要重新提交文章', 'submitted': '文章已提交'}[state['status']] + ' · 在「数据文章」查看说明、公式与插图')
             _dataset_browser(st, catalog, run, selected_runs)
         with st.expander("运行详情 / 来源与参数"):
             _run_card(st, run)
-        with st.expander("数据讨论与收藏", expanded=False) if proof_mode else st.container():
+        with st.expander("数据讨论与收藏", expanded=False) if proof_mode or article_mode else st.container():
             _data_discussion(st, social, root, run)
-    if workspace == "编辑与校样":
+    if proof_mode or article_mode:
         return
     with page_r, st.container(key="rd_related"):
         if st.button("加入对比", use_container_width=True) and current["run_id"] not in compare_ids and len(compare_ids) < 6:

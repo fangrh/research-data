@@ -113,6 +113,46 @@ def _data_url(value: Any, label: str) -> str:
     return value
 
 
+def _image_bytes(value: str, label: str) -> tuple[bytes, str]:
+    """Validate an embedded PNG/JPEG and return bytes plus MIME type."""
+    checked = _data_url(value, label)
+    mime = checked.split(";", 1)[0].split(":", 1)[1]
+    return base64.b64decode(checked.split(",", 1)[1]), mime
+
+
+def _document_extras(document: dict) -> None:
+    equations = document.get("equations", [])
+    if equations is None:
+        equations = []
+        document["equations"] = equations
+    if not isinstance(equations, list) or len(equations) > 100:
+        raise ValueError("document.equations must be a list of at most 100 items")
+    for item in equations:
+        if not isinstance(item, Mapping) or set(item) - {"latex", "description"}:
+            raise ValueError("each equation requires only latex and description")
+        if not isinstance(item.get("latex"), str) or not item["latex"].strip() or "$" in item["latex"]:
+            raise ValueError("equation.latex must be raw non-empty MathText without $ delimiters")
+        if not isinstance(item.get("description", ""), str) or len(item.get("description", "")) > 4000:
+            raise ValueError("equation.description must be text of at most 4000 characters")
+    illustrations = document.get("illustrations", [])
+    if illustrations is None:
+        illustrations = []
+        document["illustrations"] = illustrations
+    if not isinstance(illustrations, list) or len(illustrations) > 100:
+        raise ValueError("document.illustrations must be a list of at most 100 items")
+    for item in illustrations:
+        if not isinstance(item, Mapping) or set(item) - {"image", "caption", "artifact_id", "run_id", "sha256"}:
+            raise ValueError("each illustration has image, caption, artifact_id, run_id and sha256")
+        for key in ("image", "caption", "artifact_id", "run_id", "sha256"):
+            if not isinstance(item.get(key), str) or not item[key].strip():
+                raise ValueError(f"illustration.{key} must be non-empty text")
+        _data_url(item["image"], "illustration.image")
+        if not re.fullmatch(r"[0-9a-f]{64}", item["sha256"]):
+            raise ValueError("illustration.sha256 must be a lowercase SHA-256")
+        if len(item["caption"]) > 4000:
+            raise ValueError("illustration.caption must be at most 4000 characters")
+
+
 def _scene(scene: Any) -> dict:
     if not isinstance(scene, dict) or scene.get("schema") != "three-interact.scene" or scene.get("version") != 1:
         raise ValueError("scene must be a three-interact.scene v1 object")
@@ -177,6 +217,7 @@ def _payload(payload: Mapping[str, Any]) -> dict:
     for field in ("title", "authors", "abstract", "body", "caption"):
         if not isinstance(document.get(field, ""), str):
             raise ValueError(f"document.{field} must be text")
+    _document_extras(document)
     inputs = payload.get("inputs")
     if not isinstance(inputs, list):
         raise ValueError("inputs must be a list")
@@ -278,6 +319,45 @@ class ProofStore:
             frozen.append({"run_id": run_id, "artifact_id": artifact["artifact_id"], "sha256": artifact["sha256"], "source_run_provenance": self.catalog.get(run_id).get("provenance", {})})
         return parents, frozen
 
+    def _freeze_article_resources(self, document: dict, folder: Path, frozen_inputs: list[dict]) -> tuple[dict, dict]:
+        """Render/copy optional article resources once into a revision folder."""
+        from .math_render import render_equation
+        frozen = json.loads(json.dumps(document, ensure_ascii=False))
+        resources = {"equations": [], "illustrations": []}
+        for index, item in enumerate(document.get("equations", [])):
+            rendered = render_equation(item["latex"])
+            png_name, svg_name = f"equation-{index}.png", f"equation-{index}.svg"
+            (folder / png_name).write_bytes(rendered.png)
+            (folder / svg_name).write_bytes(rendered.svg)
+            entry = {"index": index, "png": png_name, "svg": svg_name,
+                     "png_sha256": hashlib.sha256(rendered.png).hexdigest(),
+                     "svg_sha256": hashlib.sha256(rendered.svg).hexdigest(),
+                     "width": rendered.width, "height": rendered.height,
+                     "dpi": rendered.dpi, "fontsize": rendered.fontsize}
+            resources["equations"].append(entry)
+            frozen["equations"][index]["resource"] = entry
+        allowed = {(item["run_id"], item["artifact_id"], item["sha256"]) for item in frozen_inputs}
+        for index, item in enumerate(document.get("illustrations", [])):
+            key = (item["run_id"], item["artifact_id"], item["sha256"])
+            if key not in allowed:
+                raise ValueError("illustration must reference a verified payload input artifact")
+            image_bytes, mime = _image_bytes(item["image"], f"illustration {index}")
+            if hashlib.sha256(image_bytes).hexdigest() != item["sha256"]:
+                raise ValueError(f"illustration {index} hash does not match image bytes")
+            artifact = self.catalog.select_artifact(item["run_id"], item["artifact_id"])
+            source = (self.root / "runs" / item["run_id"] / artifact["path"]).resolve()
+            run_root = (self.root / "runs" / item["run_id"]).resolve()
+            if not source.is_file() or not source.is_relative_to(run_root) or _file_hash(source) != item["sha256"]:
+                raise ValueError(f"illustration {index} source artifact is missing or tampered")
+            suffix = ".jpg" if mime == "image/jpeg" else ".png"
+            name = f"illustration-{index}{suffix}"
+            (folder / name).write_bytes(image_bytes)
+            entry = {"index": index, "path": name, "sha256": item["sha256"],
+                     "run_id": item["run_id"], "artifact_id": item["artifact_id"]}
+            resources["illustrations"].append(entry)
+            frozen["illustrations"][index]["resource"] = entry
+        return frozen, resources
+
     def publish(self, run_id: str, payload: Mapping[str, Any] | None = None, figure_png: bytes | str | None = None) -> dict:
         rid = _safe_id(run_id, "run id")
         base = _payload(payload) if payload is not None else None
@@ -291,6 +371,20 @@ class ProofStore:
         if "figure_png" not in base:
             raise RuntimeError("publish requires figure_png bytes or a saved figure_png data URL")
         owner = self.catalog.get(rid)
+        article_source = None
+        article_ref = base.get("document", {}).get("article_provenance")
+        if article_ref is not None:
+            if not isinstance(article_ref, Mapping) or set(article_ref) != {"revision_id", "draft_sha256"} or not isinstance(article_ref.get("revision_id"), str) or not re.fullmatch(r"[a-f0-9]{32}", article_ref["revision_id"]) or not re.fullmatch(r"[a-f0-9]{64}", str(article_ref.get("draft_sha256"))):
+                raise ValueError("invalid article provenance reference")
+            from .articles import ArticleStore
+            try:
+                source_revision = ArticleStore(self.root).get_revision(rid, article_ref["revision_id"])
+            except Exception as exc:
+                raise ValueError("article provenance reference is missing or tampered") from exc
+            if source_revision["receipt"].get("sha256") != article_ref["draft_sha256"]:
+                raise ValueError("article provenance draft hash does not match frozen revision")
+            source_folder = Path(source_revision["path"])
+            article_source = {"article": (source_folder / "article.json").read_bytes(), "receipt": (source_folder / "receipt.json").read_bytes(), "revision_id": article_ref["revision_id"]}
         parents, frozen_inputs = self._verify_inputs(base)
         if rid not in parents:
             parents.insert(0, rid)
@@ -299,24 +393,33 @@ class ProofStore:
         payload_hash = _hash(base)
         vendor = Path(__file__).resolve().parent / "resources" / "three_interact" / "vendor.json"
         source_root = Path(__file__).resolve().parent
-        source_paths = ["proofs.py", "figure_editor.py"] + (["resources/three_interact"] if vendor.is_file() else [])
+        source_paths = ["proofs.py", "math_render.py", "figure_editor.py"] + (["resources/three_interact"] if vendor.is_file() else [])
         run_kwargs = {"title": base["document"].get("title") or "Research proof", "project": owner.get("project", "default"), "kind": "analysis", "description": "Immutable editor proof revision", "parameters": {"proof_revision_id": revision_id, "proof_payload_hash": payload_hash, "inputs": frozen_inputs}, "parent_run_ids": parents, "repo": str(source_root), "entrypoint": "proofs.py", "source_paths": source_paths}
         # Freeze the producing source before rendering, including the actual vendored editor bytes.
         with self.catalog.run(**run_kwargs) as analysis:
             folder.mkdir(parents=True)
             scene_path = folder / "scene.json"; document_path = folder / "document.json"; assets_path = folder / "assets.json"; recipe_path = folder / "recipe.json"; png_path = folder / "figure.png"; html_path = folder / "report.html"; pdf_path = folder / "report.pdf"
-            scene_path.write_bytes(json.dumps(base["scene"], ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"); document_path.write_bytes(_canonical(base["document"]) + b"\n"); assets_path.write_bytes(_canonical({"assets": base["assets"], "editor": base["editor"]}) + b"\n"); recipe_path.write_bytes(_canonical(base.get("recipe", {})) + b"\n")
+            frozen_document, resources = self._freeze_article_resources(base["document"], folder, frozen_inputs)
+            article_submission = None
+            if article_source is not None:
+                article_path = folder / "article-source.json"; receipt_path = folder / "article-receipt.json"
+                article_path.write_bytes(article_source["article"]); receipt_path.write_bytes(article_source["receipt"])
+                article_submission = {"revision_id": article_source["revision_id"], "article": article_path.name, "article_sha256": _file_hash(article_path), "receipt": receipt_path.name, "receipt_sha256": _file_hash(receipt_path)}
+            scene_path.write_bytes(json.dumps(base["scene"], ensure_ascii=False, allow_nan=False).encode("utf-8") + b"\n"); document_path.write_bytes(_canonical(frozen_document) + b"\n"); assets_path.write_bytes(_canonical({"assets": base["assets"], "editor": base["editor"]}) + b"\n"); recipe_path.write_bytes(_canonical(base.get("recipe", {})) + b"\n")
             png_bytes = base64.b64decode(base["figure_png"].split(",", 1)[1]); png_path.write_bytes(png_bytes)
-            self._render_html(html_path, base, revision_id, rid, frozen_inputs)
-            self._render_pdf(pdf_path, base, revision_id, png_bytes, rid)
-            manifest = {"schema": "research-data.proof.v1", "revision_id": revision_id, "run_id": rid, "created_at": _now(), "payload_hash": payload_hash, "analysis_run_id": analysis.run_id, "scene_sha256": _file_hash(scene_path), "document_sha256": _file_hash(document_path), "assets_sha256": _file_hash(assets_path), "recipe_sha256": _file_hash(recipe_path), "figure_sha256": _file_hash(png_path), "html_sha256": _file_hash(html_path), "pdf_sha256": _file_hash(pdf_path), "inputs": frozen_inputs, "source_runs": parents, "owner_provenance": owner.get("provenance", {}), "editor": base["editor"], "files": {"scene": scene_path.name, "document": document_path.name, "assets": assets_path.name, "recipe": recipe_path.name, "figure_png": png_path.name, "html": html_path.name, "pdf": pdf_path.name}}
+            self._render_html(html_path, {**base, "document": frozen_document}, revision_id, rid, frozen_inputs, folder, resources)
+            self._render_pdf(pdf_path, {**base, "document": frozen_document}, revision_id, png_bytes, rid, folder, resources)
+            manifest = {"schema": "research-data.proof.v1", "revision_id": revision_id, "run_id": rid, "created_at": _now(), "payload_hash": payload_hash, "analysis_run_id": analysis.run_id, "scene_sha256": _file_hash(scene_path), "document_sha256": _file_hash(document_path), "assets_sha256": _file_hash(assets_path), "recipe_sha256": _file_hash(recipe_path), "figure_sha256": _file_hash(png_path), "html_sha256": _file_hash(html_path), "pdf_sha256": _file_hash(pdf_path), "resources": resources, "inputs": frozen_inputs, "source_runs": parents, "owner_provenance": owner.get("provenance", {}), "editor": base["editor"], "files": {"scene": scene_path.name, "document": document_path.name, "assets": assets_path.name, "recipe": recipe_path.name, "figure_png": png_path.name, "html": html_path.name, "pdf": pdf_path.name}}
+            if article_submission is not None: manifest["article_submission"] = article_submission
             vendor_copy = folder / "editor-vendor.json"
             if vendor.is_file():
                 vendor_copy.write_bytes(vendor.read_bytes())
                 manifest["editor_asset"] = {"path": vendor_copy.name, "sha256": _file_hash(vendor_copy)}
                 manifest["files"]["editor_vendor"] = vendor_copy.name
             _atomic_json(folder / "manifest.json", manifest)
-            artifact_files = [(scene_path, "scene"), (document_path, "document"), (assets_path, "assets"), (recipe_path, "recipe"), (png_path, "figure"), (html_path, "report"), (pdf_path, "report"), (folder / "manifest.json", "proof-manifest")]
+            resource_files = [folder / item[key] for item in resources["equations"] for key in ("png", "svg")] + [folder / item["path"] for item in resources["illustrations"]]
+            artifact_files = [(scene_path, "scene"), (document_path, "document"), (assets_path, "assets"), (recipe_path, "recipe"), (png_path, "figure"), (html_path, "report"), (pdf_path, "report"), *[(item, "proof-resource") for item in resource_files], (folder / "manifest.json", "proof-manifest")]
+            if article_source is not None: artifact_files.extend([(folder / "article-source.json", "article-source"), (folder / "article-receipt.json", "article-receipt")])
             if vendor_copy.is_file(): artifact_files.append((vendor_copy, "editor-vendor"))
             for path, role in artifact_files:
                 analysis.add_artifact(path, role=role, copy=True, description=f"Proof revision {revision_id}")
@@ -338,6 +441,21 @@ class ProofStore:
             candidate = (folder / file_value).resolve()
             if not candidate.is_relative_to(folder) or not candidate.is_file() or _file_hash(candidate) != expected:
                 raise ValueError(f"immutable proof file is missing or tampered: {key}")
+        for item in value.get("resources", {}).get("equations", []):
+            for key, digest_key in (("png", "png_sha256"), ("svg", "svg_sha256")):
+                candidate = (folder / item[key]).resolve()
+                if not candidate.is_file() or not candidate.is_relative_to(folder) or _file_hash(candidate) != item[digest_key]:
+                    raise ValueError(f"immutable proof file is missing or tampered: equation {key}")
+        for item in value.get("resources", {}).get("illustrations", []):
+            candidate = (folder / item["path"]).resolve()
+            if not candidate.is_file() or not candidate.is_relative_to(folder) or _file_hash(candidate) != item["sha256"]:
+                raise ValueError("immutable proof file is missing or tampered: illustration")
+        article_submission = value.get("article_submission")
+        if article_submission:
+            for key, digest_key in (("article", "article_sha256"), ("receipt", "receipt_sha256")):
+                candidate = (folder / article_submission.get(key, "")).resolve()
+                if not candidate.is_relative_to(folder) or not candidate.is_file() or _file_hash(candidate) != article_submission.get(digest_key):
+                    raise ValueError(f"immutable article submission file is missing or tampered: {key}")
         vendor = value.get("editor_asset")
         if vendor:
             candidate = (folder / vendor["path"]).resolve()
@@ -347,7 +465,14 @@ class ProofStore:
 
     def _comment_target(self, revision: dict, anchor: str, locator: Mapping[str, Any] | None = None) -> dict:
         scene = json.loads((Path(revision["path"]) / "scene.json").read_text(encoding="utf-8"))
-        if not isinstance(anchor, str) or (anchor not in _ANCHORS and not (anchor.startswith("element:") and anchor[8:] in scene["elements"])):
+        document = json.loads((Path(revision["path"]) / "document.json").read_text(encoding="utf-8"))
+        extra = re.fullmatch(r"(equation|illustration|illustration-caption):(\d+)", anchor or "") if isinstance(anchor, str) else None
+        if extra:
+            kind_name, index = extra.group(1), int(extra.group(2))
+            collection = "equations" if kind_name == "equation" else "illustrations"
+            if index >= len(document.get(collection, [])) or (kind_name == "illustration-caption" and index >= len(document.get("illustrations", []))):
+                raise ValueError("comment anchor index is not present in frozen document")
+        if not isinstance(anchor, str) or (anchor not in _ANCHORS and not extra and not (anchor.startswith("element:") and anchor[8:] in scene["elements"])):
             raise ValueError("unknown comment anchor")
         if locator is None:
             return {"anchor": anchor, "locator": None}
@@ -355,21 +480,24 @@ class ProofStore:
             raise ValueError("comment locator must be an object with a valid kind")
         kind = locator["kind"]
         if kind == "text":
-            if anchor not in {"title", "abstract", "body", "caption"}:
+            text_anchor = anchor in {"title", "abstract", "body", "caption"}
+            if not text_anchor and extra and extra.group(1) in {"equation", "illustration-caption"}:
+                value = document["equations" if extra.group(1) == "equation" else "illustrations"][int(extra.group(2))].get("description" if extra.group(1) == "equation" else "caption", "")
+            elif text_anchor:
+                value = document.get(anchor)
+            else:
                 raise ValueError("text locator requires a document text anchor")
             if set(locator) != {"kind", "start", "end", "exact"}:
                 raise ValueError("text locator has unknown keys")
             start, end, exact = locator["start"], locator["end"], locator["exact"]
             if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, int) or not isinstance(end, int) or start < 0 or end <= start or not isinstance(exact, str) or not exact:
                 raise ValueError("text locator offsets or exact text are invalid")
-            document = json.loads((Path(revision["path"]) / "document.json").read_text(encoding="utf-8"))
-            value = document.get(anchor)
             if not isinstance(value, str) or end > len(value) or value[start:end] != exact:
                 raise ValueError("text locator does not match frozen document")
             return {"anchor": anchor, "locator": {"kind": "text", "start": start, "end": end, "exact": exact}}
         if kind == "point":
-            if anchor != "figure" or set(locator) != {"kind", "x", "y"}:
-                raise ValueError("point locator requires figure anchor and only x/y keys")
+            if not ((anchor == "figure" or (extra and extra.group(1) == "illustration")) and set(locator) == {"kind", "x", "y"}):
+                raise ValueError("point locator requires figure or illustration anchor and only x/y keys")
             x, y = locator["x"], locator["y"]
             if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1 for value in (x, y)):
                 raise ValueError("point locator coordinates must be finite numbers from 0 to 1")
@@ -461,17 +589,27 @@ class ProofStore:
         return self._comment_view(raw + [comment])[-1]
 
     @staticmethod
-    def _render_html(path: Path, payload: dict, revision_id: str, run_id: str, frozen_inputs: list[dict]) -> None:
+    def _render_html(path: Path, payload: dict, revision_id: str, run_id: str, frozen_inputs: list[dict], folder: Path | None = None, resources: dict | None = None) -> None:
         d = payload["document"]; fig = payload["figure_png"]
         body = "<br>".join(html.escape(d["body"]).splitlines())
         editor_version = payload.get("editor", {}).get("upstream", payload.get("editor", {}).get("bundle", {})).get("version", "unknown")
         inputs = "; ".join(f"{html.escape(str(i['run_id']))}/{html.escape(str(i['artifact_id']))} ({html.escape(str(i['sha256']))})" for i in frozen_inputs) or "none"
         layout = "double" if d.get("layout") == "double" else "single"
-        text = f"<!doctype html><meta charset='utf-8'><article class='proof {layout}'><header><h1>{html.escape(d['title'])}</h1><p class='authors'>{html.escape(d['authors'])}</p><p class='meta'>Run {html.escape(run_id)} · Revision {html.escape(revision_id)} · Editor {html.escape(str(editor_version))}</p></header><h2>Abstract</h2><p>{html.escape(d['abstract'])}</p><figure><img src='{html.escape(fig, quote=True)}' alt='figure'><figcaption>{html.escape(d['caption'])}</figcaption></figure><section>{body}</section><footer>Inputs: {inputs}<br>Payload SHA-256: {html.escape(_hash(payload))}</footer></article><style>body{{font-family:Georgia,serif;margin:40px;line-height:1.55;color:#18212b}}article{{max-width:900px;margin:auto}}h1{{font-size:32px;margin-bottom:4px}}.authors{{color:#576575}}.meta,footer{{font:12px ui-monospace,monospace;color:#536273}}img{{max-width:100%;height:auto}}figcaption{{font-size:.9em;color:#576575}}footer{{margin-top:32px;border-top:1px solid #ccd3da;padding-top:8px}}.double section{{column-count:2;column-gap:32px}}.double figure{{break-inside:avoid}}</style>"
+        def data_url(name: str, mime: str) -> str:
+            return "data:" + mime + ";base64," + base64.b64encode((folder / name).read_bytes()).decode("ascii") if folder else ""
+        equations = []
+        for item, resource in zip(d.get("equations", []), (resources or {}).get("equations", [])):
+            equations.append(f"<figure class='equation'><img src='{data_url(resource['png'], 'image/png')}' alt='{html.escape(item['latex'], quote=True)}'><figcaption>{html.escape(item.get('description', ''))}</figcaption></figure>")
+        illustrations = []
+        for item, resource in zip(d.get("illustrations", []), (resources or {}).get("illustrations", [])):
+            mime = 'image/jpeg' if resource['path'].endswith('.jpg') else 'image/png'
+            illustrations.append(f"<figure class='illustration'><img src='{data_url(resource['path'], mime)}' alt='supplementary illustration'><figcaption>{html.escape(item['caption'])}</figcaption></figure>")
+        extras = ''.join(equations) + ("<h2>Supplementary illustrations</h2>" + ''.join(illustrations) if illustrations else '')
+        text = f"<!doctype html><meta charset='utf-8'><article class='proof {layout}'><header><h1>{html.escape(d['title'])}</h1><p class='authors'>{html.escape(d['authors'])}</p><p class='meta'>Run {html.escape(run_id)} · Revision {html.escape(revision_id)} · Editor {html.escape(str(editor_version))}</p></header><h2>Abstract</h2><p>{html.escape(d['abstract'])}</p><figure><img src='{html.escape(fig, quote=True)}' alt='figure'><figcaption>{html.escape(d['caption'])}</figcaption></figure>{extras}<section>{body}</section><footer>Inputs: {inputs}<br>Payload SHA-256: {html.escape(_hash(payload))}</footer></article><style>body{{font-family:Georgia,serif;margin:40px;line-height:1.55;color:#18212b}}article{{max-width:900px;margin:auto}}h1{{font-size:32px;margin-bottom:4px}}.authors{{color:#576575}}.meta,footer{{font:12px ui-monospace,monospace;color:#536273}}img{{max-width:100%;height:auto}}figcaption{{font-size:.9em;color:#576575}}footer{{margin-top:32px;border-top:1px solid #ccd3da;padding-top:8px}}.double section{{column-count:2;column-gap:32px}}.double figure{{break-inside:avoid}}.equation img{{max-width:80%}}</style>"
         path.write_text(text, encoding="utf-8")
 
     @staticmethod
-    def _render_pdf(path: Path, payload: dict, revision_id: str, png_bytes: bytes, run_id: str = "") -> None:
+    def _render_pdf(path: Path, payload: dict, revision_id: str, png_bytes: bytes, run_id: str = "", folder: Path | None = None, resources: dict | None = None) -> None:
         try:
             from reportlab.lib.enums import TA_CENTER
             from reportlab.lib.pagesizes import A4
@@ -479,19 +617,58 @@ class ProofStore:
             from reportlab.lib.units import mm
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+            from reportlab.pdfbase.ttfonts import TTFont
             from reportlab.platypus import BaseDocTemplate, Frame, FrameBreak, Image, NextPageTemplate, PageBreak, PageTemplate, Paragraph, Spacer
         except ImportError as exc:
             raise RuntimeError("PDF export requires reportlab>=4,<5; install the PDF extras and retry") from exc
-        if not any(re.search(r"[\u2e80-\u9fff\uf900-\ufaff]", str(payload["document"].get(k, ""))) for k in ("title", "authors", "abstract", "body", "caption")):
-            font = "Times-Roman"
-        else:
-            pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light")); font = "STSong-Light"
+        cjk_text = [str(payload["document"].get(k, "")) for k in ("title", "authors", "abstract", "body", "caption")]
+        cjk_text.extend(str(item.get("description", "")) for item in payload["document"].get("equations", []))
+        cjk_text.extend(str(item.get("caption", "")) for item in payload["document"].get("illustrations", []))
+        cjk_range = r"[\u2e80-\u9fff\uf900-\ufaff\uff00-\uffef]"
+        has_cjk = any(re.search(cjk_range, value) for value in cjk_text)
+        font = "Times-Roman"; cjk_font = None; latin_font = "Times-Roman"
+        try:
+            import matplotlib
+            latin_path = Path(matplotlib.get_data_path()) / "fonts" / "ttf" / "DejaVuSerif.ttf"
+            if latin_path.is_file():
+                pdfmetrics.registerFont(TTFont("ProofLatin", str(latin_path))); latin_font = "ProofLatin"
+        except Exception:
+            pass
+        if has_cjk:
+            candidates = [
+                (Path("C:/Windows/Fonts/simsun.ttc"), 0),
+                (Path("C:/Windows/Fonts/simhei.ttf"), None),
+                (Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"), 0),
+                (Path("/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc"), 0),
+            ]
+            for candidate, subfont in candidates:
+                if not candidate.is_file():
+                    continue
+                try:
+                    kwargs = {} if subfont is None else {"subfontIndex": subfont}
+                    pdfmetrics.registerFont(TTFont("ProofCJK", str(candidate), **kwargs)); cjk_font = "ProofCJK"; break
+                except Exception:
+                    continue
+            if cjk_font is None:
+                pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light")); cjk_font = "STSong-Light"
+        font = latin_font
+        def mixed(value: Any) -> str:
+            text = str(value or "")
+            if not cjk_font or not re.search(cjk_range, text): return html.escape(text)
+            pieces = []; current = []; current_cjk = None
+            for char in text:
+                is_cjk = bool(re.match(cjk_range, char))
+                if current_cjk is not None and is_cjk != current_cjk:
+                    pieces.append((current_cjk, "".join(current))); current = []
+                current_cjk = is_cjk; current.append(char)
+            if current: pieces.append((current_cjk, "".join(current)))
+            return "".join((f"<font name='{cjk_font if is_cjk else latin_font}'>{html.escape(part)}</font>" for is_cjk, part in pieces))
         d = payload["document"]; styles = getSampleStyleSheet(); styles.add(ParagraphStyle(name="ProofTitle", parent=styles["Title"], fontName=font, alignment=TA_CENTER, fontSize=19, leading=24)); styles.add(ParagraphStyle(name="ProofBody", parent=styles["BodyText"], fontName=font, fontSize=9.5, leading=13)); styles.add(ParagraphStyle(name="ProofSmall", parent=styles["BodyText"], fontName=font, fontSize=8, leading=10, textColor="#536273"))
         width, height = A4; usable = width - 32 * mm
         single = Frame(16 * mm, 16 * mm, usable, height - 34 * mm, id="single")
         column_width = (usable - 8 * mm) / 2
         def footer(canvas, _doc):
-            canvas.saveState(); canvas.setFont(font, 7); canvas.setFillColorRGB(.3, .35, .4)
+            canvas.saveState(); canvas.setFont(latin_font, 7); canvas.setFillColorRGB(.3, .35, .4)
             canvas.drawString(16 * mm, 11 * mm, f"Run {run_id} | revision {revision_id[:16]}")
             canvas.drawRightString(width - 16 * mm, 11 * mm, str(_doc.page))
             canvas.setFont("Helvetica", 6)
@@ -501,9 +678,18 @@ class ProofStore:
         from reportlab.lib.utils import ImageReader
         iw, ih = ImageReader(io.BytesIO(png_bytes)).getSize()
         maxw = usable - 12; scale = min(maxw / iw, 90 * mm / ih)
-        header = [Paragraph(html.escape(d["title"]), styles["ProofTitle"]), Paragraph(html.escape(d["authors"]), styles["ProofSmall"]), Spacer(1, 5 * mm), Paragraph("<b>Abstract</b><br/>" + html.escape(d["abstract"]).replace("\n", "<br/>"), styles["ProofBody"]), Spacer(1, 5 * mm), Image(io.BytesIO(png_bytes), width=iw * scale, height=ih * scale), Paragraph("<b>Figure.</b> " + html.escape(d["caption"]), styles["ProofSmall"]), Spacer(1, 5 * mm)]
+        header = [Paragraph(mixed(d["title"]), styles["ProofTitle"]), Paragraph(mixed(d["authors"]), styles["ProofSmall"]), Spacer(1, 5 * mm), Paragraph("<b>Abstract</b><br/>" + mixed(d["abstract"]).replace("\n", "<br/>"), styles["ProofBody"]), Spacer(1, 5 * mm), Image(io.BytesIO(png_bytes), width=iw * scale, height=ih * scale), Paragraph("<b>Figure.</b> " + mixed(d["caption"]), styles["ProofSmall"]), Spacer(1, 5 * mm)]
+        if folder and resources:
+            for item, resource in zip(d.get("equations", []), resources.get("equations", [])):
+                raw = (folder / resource["png"]).read_bytes()
+                ew, eh = ImageReader(io.BytesIO(raw)).getSize(); escale = min(72 / float(resource.get("dpi", 180)), maxw / ew, 45 * mm / eh)
+                header.extend([Image(io.BytesIO(raw), width=ew * escale, height=eh * escale), Paragraph(mixed(item.get("description", "")), styles["ProofSmall"]), Spacer(1, 3 * mm)])
+            for item, resource in zip(d.get("illustrations", []), resources.get("illustrations", [])):
+                raw = (folder / resource["path"]).read_bytes()
+                ew, eh = ImageReader(io.BytesIO(raw)).getSize(); escale = min(maxw / ew, 55 * mm / eh)
+                header.extend([Image(io.BytesIO(raw), width=ew * escale, height=eh * escale), Paragraph("<b>Supplementary illustration.</b> " + mixed(item["caption"]), styles["ProofSmall"]), Spacer(1, 3 * mm)])
         body_parts = [part.strip() for part in re.split(r"\n\s*\n", d["body"]) if part.strip()] or [""]
-        body = [Paragraph(html.escape(part).replace("\n", "<br/>"), styles["ProofBody"]) for part in body_parts]
+        body = [Paragraph(mixed(part).replace("\n", "<br/>"), styles["ProofBody"]) for part in body_parts]
         if d.get("layout", "single") == "double":
             header_height = sum(item.wrap(maxw, height)[1] + item.getSpaceBefore() + item.getSpaceAfter() for item in header) + 18
             columns = [Frame(16 * mm, 16 * mm, column_width, height - 34 * mm, id="left"), Frame(16 * mm + (usable + 8 * mm) / 2, 16 * mm, column_width, height - 34 * mm, id="right")]

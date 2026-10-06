@@ -1,3 +1,18 @@
+# 0.6.0 数据文章与正式提交验证
+
+2026-10-06 / 07，Windows / Python 3.13.12 / Streamlit 1.65.0。结构及命令见 [数据文章](ARTICLES.md)。
+
+| 验证 | 结果 |
+|---|---|
+| 完整回归与最终补充 | 129 passed，151.09 s；随后补充手动公式定位菜单，相关 UI 4 passed，17.91 s。既有 HDF/NetCDF NumPy ABI warning 保留，值与坐标断言通过 |
+| 提交门与检索 | 缺项拒绝、逐数据文件说明、原始文件/源码快照校验、可验证 receipt、草稿及 manifest 变更 stale、重新提交保留旧 receipt、中文说明检索 |
+| 文章与校样 | 离线 MathText、受管 PNG/JPEG 及图注、冻结公式/图片与原文章 receipt、非法公式及跨运行图片拒绝；旧 proof 读取兼容 |
+| 实际浏览器 | 合成运行 20261006T205233-04d5b21f 提交文章 221ce1eb；带入草稿；最终校样 a84c675c；公式评论 d3cea2e9 定位正确，解决后回复继承定位并重新打开 |
+| 字体与窄窗口 | Arial / 18 px 实际应用；双栏在 480 px 自动单栏，文档 clientWidth / scrollWidth 均为 480；来源与登记参数可见；测试后恢复窗口 |
+| PDF 目视检查 | 中文、全角标点、拉丁文字、负号、μ 与下标可读；公式比例、图注及一页排版已渲染检查，示例附于 ARTICLES.md |
+
+所有浏览器写入仅使用合成示例目录。正式提交检查结构与来源完整性，不判断文章事实或科学结论是否正确。`run` / `finish` 保存执行结果；只有成功的 `submit` receipt 代表正式交付。安装包审计与 Windows/Linux CI 以 [公开 release](https://github.com/fangrh/research-data/releases/tag/v0.6.0) 及对应 Actions 为准。
+
 # 0.5.3 定位审阅与意见处理验证
 
 2026-10-06，Windows / Python 3.13.12 / Streamlit 1.65.0。工作流、定位结构及来源见 [定位审阅](PROOF_REVIEW.md)。

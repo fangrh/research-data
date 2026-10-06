@@ -55,3 +55,16 @@ Published HTML/PDF, scene/assets, vendor metadata, input hashes and source
 provenance are local immutable revision artifacts. Comments and replies are
 separate local review records; they do not change scientific validation or
 dispatch messages to an agent.
+
+## Article route
+
+Execution `run`/`finish` records output and status but is not formal submission. Use:
+
+```text
+research-data article template --run-id RUN_ID --output article.json
+research-data article save --run-id RUN_ID --file article.json
+research-data article check --run-id RUN_ID
+research-data submit RUN_ID --article article.json
+```
+
+Submission requires title, summary, methods, results, limitations, every managed data artifact with description and variable/unit/order text, and equations with descriptions or an explicit `equation_note`; managed PNG/JPEG figures need captions or an explicit `figure_note`. Use raw MathText without `$` delimiters; this is a limited offline LaTeX subset rendered by Matplotlib, not executable TeX. Do not invent units or results. A formal agent handoff returns the successful receipt, `run_id`, and `revision_id`; draft or execution completion alone is insufficient. Changes after submission make it stale and require resubmission. See `docs/ARTICLES.md`.

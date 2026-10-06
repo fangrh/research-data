@@ -76,6 +76,22 @@ The process receives `RESEARCH_DATA_OUTPUT`, `RESEARCH_DATA_RUN_ID` and `RESEARC
 
 For Python integration use `Catalog(root).run(...)` and `run.add_artifact(...)`; see [the integration reference](references/integration.md) for the exact API. Give meaningful descriptions, stable project/sample identities, variable meanings, units, coordinates, physical/numerical parameters and classifications. Unknown facts stay unknown. Link an existing Backlog task with task_id; the data catalog does not replace task management.
 
+## Write and formally submit a data article
+
+`run` and `finish` retain execution output and status; they are not formal submission. For a completed or imported run:
+
+```text
+research-data article template --run-id RUN_ID --output article.json
+# edit UTF-8 article.json
+research-data article save --run-id RUN_ID --file article.json
+research-data article check --run-id RUN_ID
+research-data submit RUN_ID --article article.json
+```
+
+Submission requires non-empty title, summary, methods, results and limitations, every managed data artifact with its description and variable/unit/order explanation, and either described raw MathText equations or `equation_note` explaining nonapplicability. Provide managed PNG/JPEG figures with captions or `figure_note`. Do not invent units, results, equations or figures. Use the supported offline limited MathText subset without `$` delimiters; do not execute TeX or depend on a CDN. See [Matplotlib MathText](https://matplotlib.org/stable/users/explain/text/mathtext.html) and [MathText API](https://matplotlib.org/stable/api/mathtext_api.html).
+
+Formal agent delivery must include a successful receipt with `run_id` and `revision_id`; a draft or successful `finish` is insufficient. Draft or managed-input changes make a submission stale and require resubmission. The article reader supports font/size and single/double layout. Adopting an article into proof creates a new proof with frozen math/images and retains existing proof comments and revisions. These instructions are not OS enforcement.
+
 ## Import and plot
 
 Historical data uses `import`, with source identity unknown unless actual provenance is supplied. Use a reusable import profile for column/axis names, units and HDF5 coordinate mappings; do not infer physical meaning from shape alone.
