@@ -274,6 +274,12 @@ def main(root: str | None = None) -> None:
     if len(project_counts) > 1:
         top_projects = sorted(project_counts, key=lambda p: -project_counts[p])[:15]
         channel = st.pills("分区", sorted(top_projects), default=None, label_visibility="collapsed", wrap=True)
+        if len(project_counts) > 15:
+            with st.expander(f"📺 全部分区（{len(project_counts)} 个）"):
+                all_channel = st.pills("全部分区", sorted(project_counts), default=None,
+                                       key="channel_all", label_visibility="collapsed", wrap=True)
+                if all_channel:
+                    channel = all_channel
     # UP 主筛选（点击卡片上的 UP 行进入；chip 可移除）
     up_filter = st.session_state.get("up_filter")  # {"field": "generator"|"project", "value": str}
     if up_filter:
@@ -317,12 +323,14 @@ def main(root: str | None = None) -> None:
 
     picked = []
     if view == "卡片":
-        # ── Bilibili 式卡片墙：封面（右下角时长徽章）+ 标题 + UP 主 + 播放/评论数 ──
-        PAGE = 12
-        num_pages = max(1, -(-len(filtered) // PAGE))
-        page = st.pagination(num_pages, key="cards_page", max_visible_pages=7)
-        page_runs = filtered[(page - 1) * PAGE: page * PAGE]
-        card_rows = [st.columns(4) for _ in range(-(-len(page_runs) // 4))]
+        # ── Bilibili 式布局：左侧卡片墙，右侧排行榜/我的收藏 ──
+        wall_col, rank_col = st.columns([4, 1.05])
+        with wall_col:
+            PAGE = 12
+            num_pages = max(1, -(-len(filtered) // PAGE))
+            page = st.pagination(num_pages, key="cards_page", max_visible_pages=7)
+            page_runs = filtered[(page - 1) * PAGE: page * PAGE]
+            card_rows = [st.columns(4) for _ in range(-(-len(page_runs) // 4))]
         for idx, r in enumerate(page_runs):
             with card_rows[idx // 4][idx % 4]:
                 fc = (r.get("parameters") or {}).get("file_count")
@@ -370,6 +378,29 @@ def main(root: str | None = None) -> None:
                     st.markdown(f"<a href='?up={quote(up_value, safe= '')}' "
                                 f"style='color:#99a2aa;font-size:12px;text-decoration:none'>UP · {up_html}</a>",
                                 unsafe_allow_html=True)
+        with rank_col:
+            # ── 排行榜（Bilibili 右侧栏）：热播=文件最多 TOP10；下方我的收藏 ──
+            def _link(r, i):
+                mark = "🔥" if i <= 3 else f"{i}."
+                t = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
+                fc = (r.get("parameters") or {}).get("file_count")
+                return (f"<div style='margin-bottom:6px'><a href='?pick={r['run_id']}' "
+                        f"style='color:inherit;text-decoration:none;font-size:13px'>"
+                        f"{mark} {t[:20]}</a>"
+                        + (f"<div style='color:#99a2aa;font-size:11px'>▶ {human_count(fc)}</div>" if fc is not None else "")
+                        + "</div>")
+            st.markdown("**🔥 排行榜 · 热播（文件最多）**")
+            hot = sorted(filtered, key=lambda r: ((r.get("parameters") or {}).get("file_count") or 0,
+                                                  r.get("created_at") or ""), reverse=True)[:10]
+            st.markdown("".join(_link(r, i) for i, r in enumerate(hot, 1)), unsafe_allow_html=True)
+            fav_ids = [rid for rid in social.favorites()
+                       if any(r["run_id"] == rid for r in filtered)]
+            if fav_ids:
+                st.markdown("**⭐ 我的收藏**")
+                by_id = {r["run_id"]: r for r in filtered}
+                st.markdown("".join(_link(by_id[rid], i) for i, rid in enumerate(fav_ids[:10], 1)),
+                            unsafe_allow_html=True)
+            st.caption("点击条目直接进入")
     else:
         # 表格视图（点列头可排序，点行选中）
         def _row(r):
