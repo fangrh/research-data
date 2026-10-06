@@ -59,6 +59,16 @@ def test_generated_proof_opens_owner_history_and_exact_revision(tmp_path, monkey
     assert not app.exception
     assert store.comments(run.run_id, first['revision_id'])[0]['text'] == 'Review on the older exact revision'
     assert store.comments(run.run_id, second['revision_id']) == []
+    frozen_manifest = Path(store.get(run.run_id, first['revision_id'])['path']) / 'manifest.json'
+    frozen_bytes = frozen_manifest.read_bytes()
+    next(widget for widget in app.button if widget.label == '解决').click().run()
+    assert not app.exception
+    assert store.comments(run.run_id, first['revision_id'])[0]['status'] == 'resolved'
+    next(widget for widget in app.button if widget.label == '重新打开').click().run()
+    assert not app.exception
+    assert store.comments(run.run_id, first['revision_id'])[0]['status'] == 'open'
+    assert frozen_manifest.read_bytes() == frozen_bytes
+    assert next(widget for widget in app.selectbox if widget.label == '查看校样版本').value == first['revision_id']
 
     # The article pane saves the same owner's draft without replacing its
     # scene or changing already frozen revisions/comments.

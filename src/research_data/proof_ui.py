@@ -213,6 +213,7 @@ def _canvas(st, store, catalog, run, rid, prefix, draft, saved_error):
 
 
 def _review(st, store, rid, prefix, revisions):
+    from .proof_review import reader, review_event, review_payload, review_threads
     options = [r["revision_id"] for r in revisions]
     remembered = st.session_state.get(prefix + "revision")
     selected = st.selectbox("查看校样版本", options, index=options.index(remembered) if remembered in options else len(options) - 1,
@@ -220,40 +221,126 @@ def _review(st, store, rid, prefix, revisions):
     revision = store.get(rid, selected)
     folder = Path(revision["path"])
     st.session_state[prefix + "revision"] = selected
+    comments = store.comments(rid, selected)
+    threads = review_threads(comments)
+    review_key = prefix + selected + "_review_"
+    focus_key, selection_key = review_key + "focus", review_key + "selection"
+    pending_focus = st.session_state.pop(review_key + "pending_focus", None)
+    if pending_focus:
+        st.session_state[focus_key] = pending_focus
+        st.session_state[prefix + "review_filter"] = "全部"
+    open_count = sum(t["root"].get("status", "open") == "open" for t in threads)
+    st.caption(f"校样 {selected[:8]} · {open_count} 条未处理 / {len(threads) - open_count} 条已解决 · 意见与定位只属于此版本")
     links = st.columns(3)
     for col, name, mime in zip(links, ["report.pdf", "report.html", "scene.json"], ["application/pdf", "text/html", "application/json"]):
         file = folder / name
         col.download_button({"report.pdf": "下载 PDF 校样", "report.html": "下载 HTML 校样", "scene.json": "下载场景 JSON"}[name], file.read_bytes(), file_name=name, mime=mime, key=prefix + selected + name)
+    view = st.segmented_control("审阅意见筛选", ["全部", "未处理", "已解决"], default="全部", key=prefix + "review_filter")
+    visible = [t for t in threads if view == "全部" or t["root"].get("status", "open") == {"未处理": "open", "已解决": "resolved"}.get(view)]
+    if st.session_state.get(focus_key) not in [t["id"] for t in visible]:
+        st.session_state[focus_key] = None
+    if st.session_state.pop(review_key + "clear_text", False):
+        st.session_state[review_key + "text"] = ""
+        st.session_state[review_key + "reply"] = None
+    scene = json.loads((folder / "scene.json").read_text(encoding="utf-8"))
+    anchors = ["document", "title", "abstract", "body", "caption", "figure", *["element:" + key for key in scene["elements"]]]
+    labels = dict(document="整份校样", title="标题", abstract="摘要", body="正文", caption="图注", figure="Figure 1")
+    labels.update({"element:" + key: "图形元素 · " + value.get("name", key) for key, value in scene["elements"].items()})
     preview, discussion = st.columns([2.1, 1], gap="large")
     with preview:
-        report_tab, figure_tab = st.tabs(["期刊校样", "图形预览"])
-        with report_tab:
-            import streamlit.components.v1 as components
-            components.html((folder / "report.html").read_text(encoding="utf-8"), height=720, scrolling=True)
-        with figure_tab:
-            st.image(str(folder / "figure.png"), caption=f"Figure 1 · 校样 {selected[:8]}", width="stretch")
+        value = reader(review_payload(revision), visible, selection=st.session_state.get(selection_key),
+                       focus=st.session_state.get(focus_key), focus_token=st.session_state.get(review_key + "focus_token", 0),
+                       key=prefix + "review_reader")
+        if isinstance(value, dict) and value.get("event_id") != st.session_state.get(prefix + "review_event"):
+            st.session_state[prefix + "review_event"] = value.get("event_id")
+            try:
+                event = review_event(store, rid, selected, value, comments)
+                if event:
+                    if event["action"] == "select":
+                        st.session_state[selection_key] = {"anchor": event["anchor"], "locator": event["locator"]}
+                        st.session_state[review_key + "anchor"] = event["anchor"]
+                        st.session_state[review_key + "reply"] = None
+                        st.session_state[focus_key] = None
+                    else:
+                        st.session_state[focus_key] = event["thread_id"]
+                        st.session_state.pop(selection_key, None)
+                    st.rerun()
+            except ValueError as exc:
+                st.warning(f"无法定位此意见：{exc}")
     with discussion, st.container(border=True):
         st.markdown("**审阅意见**")
-        scene = json.loads((folder / "scene.json").read_text(encoding="utf-8"))
-        anchors = ["document", "title", "abstract", "body", "caption", "figure", *["element:" + key for key in scene["elements"]]]
-        labels = dict(document="整份校样", title="标题", abstract="摘要", body="正文", caption="图注", figure="Figure 1")
-        labels.update({"element:" + key: "图形元素 · " + value.get("name", key) for key,value in scene["elements"].items()})
-        comments = store.comments(rid, selected)
-        if not comments:
-            st.caption("此版本暂无评论，可选择整份校样、正文或具体图形元素。")
-        for comment in comments:
-            st.markdown(f"**{comment['author']}** · {labels.get(comment['anchor'], comment['anchor'])} · `{comment['id'][:8]}`")
-            if comment.get("parent_id"):
-                st.caption("回复 " + comment["parent_id"][:8])
-            st.markdown(comment["text"])
-        with st.form(prefix + selected + "comment_form", clear_on_submit=True):
-            anchor = st.selectbox("评论位置", anchors, format_func=labels.get)
-            reply = st.selectbox("回复评论", [None, *[c["id"] for c in comments]], format_func=lambda value: "新评论" if value is None else next(c["text"][:50] for c in comments if c["id"] == value))
-            text = st.text_area("校样评论", height=90)
+        notice = st.session_state.pop(review_key + "notice", None)
+        if notice:
+            st.success(notice)
+        by_id = {t["id"]: t for t in visible}
+        focused = st.selectbox("审阅线程", [None, *by_id], key=focus_key, placeholder="新意见 / 从校样选择位置",
+                               format_func=lambda value: "新意见 / 从校样选择位置" if value is None else
+                               f"{by_id[value]['number']:02d} · {labels.get(by_id[value]['root']['anchor'], '意见')} · {by_id[value]['root']['text'][:40]}")
+        if focused:
+            thread = by_id[focused]
+            root = thread["root"]
+            st.caption(f"意见 {thread['number']:02d} · {'已解决' if root.get('status') == 'resolved' else '未处理'} · {labels.get(root['anchor'], root['anchor'])} · {root['id'][:8]}")
+            _review_target(st, root)
+            for comment in thread["comments"]:
+                st.markdown(f"**{comment['author']}** · `{comment['created_at'][:16].replace('T', ' ')}`")
+                if comment.get("parent_id"):
+                    st.caption("回复 " + comment["parent_id"][:8])
+                st.markdown(comment["text"])
+            locate, reply_button, status = st.columns(3)
+            if locate.button("定位", key=review_key + "locate", use_container_width=True):
+                st.session_state[review_key + "focus_token"] = st.session_state.get(review_key + "focus_token", 0) + 1
+                st.rerun()
+            if reply_button.button("回复", key=review_key + "reply_button", use_container_width=True):
+                st.session_state[review_key + "reply"] = root["id"]
+                st.session_state[review_key + "anchor"] = root["anchor"]
+                st.session_state.pop(selection_key, None)
+                st.rerun()
+            next_status = "open" if root.get("status") == "resolved" else "resolved"
+            if status.button("重新打开" if next_status == "open" else "解决", key=review_key + "status", use_container_width=True):
+                try:
+                    store.set_comment_status(rid, selected, root["id"], next_status)
+                    st.session_state[review_key + "notice"] = "意见已重新打开。" if next_status == "open" else "意见已标记为已解决；可从「已解决」筛选查看和重开。"
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
+            if root.get("status_history"):
+                with st.expander("处理记录"):
+                    for event in root["status_history"]:
+                        st.caption(f"{event.get('at', '')[:16].replace('T', ' ')} · {event.get('author', '')} · {event.get('status', '')} {event.get('note', '')}")
+        elif not visible:
+            st.caption("此筛选下暂无意见。选取原文、点击图中位置，或选择下方评论位置即可创建意见。")
+        selection = st.session_state.get(selection_key)
+        if selection:
+            st.markdown("**已选择评论位置**")
+            st.caption(labels.get(selection["anchor"], selection["anchor"]))
+            _review_target(st, selection)
+            if st.button("清除定位", key=review_key + "clear_selection"):
+                st.session_state.pop(selection_key, None)
+                st.rerun()
+        with st.form(prefix + selected + "comment_form", clear_on_submit=False):
+            anchor = st.selectbox("评论位置", anchors, format_func=labels.get, key=review_key + "anchor")
+            reply = st.selectbox("回复评论", [None, *[c["id"] for c in comments]], key=review_key + "reply", placeholder="新评论",
+                                 format_func=lambda value: "新评论" if value is None else next(c["text"][:50] for c in comments if c["id"] == value))
+            st.caption("回复沿用原线程的位置；向已解决线程回复会重新打开它。")
+            text = st.text_area("校样评论", height=90, key=review_key + "text")
             if st.form_submit_button("提交校样评论"):
                 try:
-                    store.add_comment(rid, selected, text, anchor=anchor, parent_id=reply)
+                    locator = selection.get("locator") if selection and selection["anchor"] == anchor and reply is None else None
+                    created = store.add_comment(rid, selected, text, anchor=anchor, parent_id=reply, locator=locator)
+                    st.session_state[review_key + "pending_focus"] = created.get("thread_id", created["id"])
+                    st.session_state.pop(selection_key, None)
+                    st.session_state[review_key + "clear_text"] = True
+                    st.session_state[review_key + "notice"] = "意见已保存到此校样版本。"
                     st.rerun()
                 except Exception as exc:
                     st.error(str(exc))
         st.caption(f"评论只属于校样 {selected[:8]}；后续编辑会生成新版本。分析记录：{revision.get('analysis_run_id', '未登记')}")
+
+
+def _review_target(st, comment):
+    locator = comment.get("locator") or {}
+    if locator.get("kind") == "text":
+        st.text(locator["exact"][:600] + ("…" if len(locator["exact"]) > 600 else ""))
+        st.caption(f"原文字符 {locator['start']}–{locator['end']} · 按此版本定位")
+    elif locator.get("kind") == "point":
+        st.caption(f"图中位置 · x {locator['x']:.1%} / y {locator['y']:.1%}")

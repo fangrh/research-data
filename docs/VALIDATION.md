@@ -1,3 +1,21 @@
+# 0.5.3 定位审阅与意见处理验证
+
+2026-10-06，Windows / Python 3.13.12 / Streamlit 1.65.0。工作流、定位结构及来源见 [定位审阅](PROOF_REVIEW.md)。
+
+| 验证 | 结果 |
+|---|---|
+| 完整回归 | 111 passed，197.92 s；既有 HDF/NetCDF NumPy ABI warning 保留，值与坐标断言通过 |
+| Windows CLI 补充修复 | 2 passed；真实 GBK 子进程创建带 emoji 的引用评论，输出 JSON 可解析且持久化文本不变；UTF-8 输出保持可读 Unicode |
+| 定位及版本边界 | Unicode 字符范围和 exact 原文核对；非法定位和跨版本回复拒绝；旧评论读取不重写侧文件；线程继承位置和状态 |
+| 实际浏览器 | 创建正文评论 85db8834（205–421）、图中评论 68118586（约 50% / 50%）；原生拖选短句得到 423–441；编号跳转、解决筛选、回复重开和直接重开通过 |
+| 冻结内容 | 合成目录中 4 个旧版本的 36 个冻结文件与操作前 SHA-256 全部一致；意见及状态仅更新独立评论文件 |
+| 窄窗口 | 480 px 阅读与讨论上下排列，clientWidth / scrollWidth 均为 480；图中编号随图缩放；测试后恢复默认窗口 |
+| 独立 CLI 使用 | 无 UTF-8 环境覆盖，help/guide、emoji 引用、回复、按状态筛选及解决/重开通过；跨版本回复退出码 2，原校样完整性保持 |
+
+所有浏览器写入使用合成示例。完整测试与随后两个编码修复测试分开记录；最终安装包审计和 Windows/Linux CI 见对应 [公开 release](https://github.com/fangrh/research-data/releases/tag/v0.5.3) 与 Actions。处理状态是编辑意见状态，不代表科学验收。
+
+![原文高亮、讨论和处理按钮](proof-anchored-review.png)
+
 # 0.5.2 统一工作区验证
 
 2026-10-06，Windows / Python 3.13.12 / Streamlit 1.65.0。设计来源和截图见 [统一工作区](UNIFIED_WORKSPACE.md)。

@@ -11,6 +11,7 @@ import hashlib
 import html
 import io
 import json
+import math
 import os
 import re
 import tempfile
@@ -344,23 +345,120 @@ class ProofStore:
                 raise ValueError("immutable editor metadata is missing or tampered")
         value["path"] = str(folder); return value
 
-    def comments(self, run_id: str, revision_id: str) -> list[dict]:
-        revision = self.get(run_id, revision_id); path = Path(revision["path"]) / "comments.json"
-        return json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+    def _comment_target(self, revision: dict, anchor: str, locator: Mapping[str, Any] | None = None) -> dict:
+        scene = json.loads((Path(revision["path"]) / "scene.json").read_text(encoding="utf-8"))
+        if not isinstance(anchor, str) or (anchor not in _ANCHORS and not (anchor.startswith("element:") and anchor[8:] in scene["elements"])):
+            raise ValueError("unknown comment anchor")
+        if locator is None:
+            return {"anchor": anchor, "locator": None}
+        if not isinstance(locator, Mapping) or not isinstance(locator.get("kind"), str):
+            raise ValueError("comment locator must be an object with a valid kind")
+        kind = locator["kind"]
+        if kind == "text":
+            if anchor not in {"title", "abstract", "body", "caption"}:
+                raise ValueError("text locator requires a document text anchor")
+            if set(locator) != {"kind", "start", "end", "exact"}:
+                raise ValueError("text locator has unknown keys")
+            start, end, exact = locator["start"], locator["end"], locator["exact"]
+            if isinstance(start, bool) or isinstance(end, bool) or not isinstance(start, int) or not isinstance(end, int) or start < 0 or end <= start or not isinstance(exact, str) or not exact:
+                raise ValueError("text locator offsets or exact text are invalid")
+            document = json.loads((Path(revision["path"]) / "document.json").read_text(encoding="utf-8"))
+            value = document.get(anchor)
+            if not isinstance(value, str) or end > len(value) or value[start:end] != exact:
+                raise ValueError("text locator does not match frozen document")
+            return {"anchor": anchor, "locator": {"kind": "text", "start": start, "end": end, "exact": exact}}
+        if kind == "point":
+            if anchor != "figure" or set(locator) != {"kind", "x", "y"}:
+                raise ValueError("point locator requires figure anchor and only x/y keys")
+            x, y = locator["x"], locator["y"]
+            if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not 0 <= value <= 1 for value in (x, y)):
+                raise ValueError("point locator coordinates must be finite numbers from 0 to 1")
+            return {"anchor": anchor, "locator": {"kind": "point", "x": x, "y": y}}
+        raise ValueError("unknown comment locator kind")
 
-    def add_comment(self, run_id: str, revision_id: str, text: str, anchor: str = "figure", author: str = "本地用户", parent_id: str | None = None) -> dict:
+    def comment_target(self, run_id: str, revision_id: str, anchor: str, locator: Mapping[str, Any] | None = None) -> dict:
+        return self._comment_target(self.get(run_id, revision_id), anchor, locator)
+
+    def _comment_view(self, raw: list[dict]) -> list[dict]:
+        by_id = {item.get("id"): item for item in raw}
+        result = []
+        for item in raw:
+            root = item
+            seen = set()
+            while root.get("parent_id") is not None and root.get("parent_id") in by_id and root.get("id") not in seen:
+                seen.add(root.get("id")); root = by_id[root["parent_id"]]
+            value = dict(item)
+            value["thread_id"] = root.get("id")
+            value["status"] = root.get("status", "open")
+            if root.get("anchor") is not None:
+                value["anchor"] = root["anchor"]
+            if "locator" in root:
+                value["locator"] = root["locator"]
+            result.append(value)
+        return result
+
+    def comments(self, run_id: str, revision_id: str, status: str = "all") -> list[dict]:
+        revision = self.get(run_id, revision_id); path = Path(revision["path"]) / "comments.json"
+        raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+        if not isinstance(raw, list):
+            raise ValueError("comments sidecar must be a list")
+        result = self._comment_view(raw)
+        if status not in {"all", "open", "resolved"}:
+            raise ValueError("comment status must be all, open, or resolved")
+        return result if status == "all" else [item for item in result if item["status"] == status]
+
+    def set_comment_status(self, run_id: str, revision_id: str, comment_id: str, status: str, author: str = "本地用户", note: str = "") -> dict:
+        if status not in {"open", "resolved"}:
+            raise ValueError("comment status must be open or resolved")
+        _safe_id(comment_id, "comment id")
+        if not isinstance(author, str) or not author.strip() or len(author) > 200:
+            raise ValueError("comment author must be non-empty and at most 200 characters")
+        if not isinstance(note, str) or len(note) > 12000:
+            raise ValueError("status note must be at most 12000 characters")
+        revision = self.get(run_id, revision_id); path = Path(revision["path"]) / "comments.json"
+        with _lock(Path(revision["path"]) / ".comments.lock"):
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            by_id = {item.get("id"): item for item in raw}
+            if comment_id not in by_id:
+                raise KeyError(comment_id)
+            root = by_id[comment_id]
+            seen = set()
+            while root.get("parent_id") is not None:
+                if root.get("id") in seen or root.get("parent_id") not in by_id:
+                    raise ValueError("comment thread is malformed")
+                seen.add(root.get("id")); root = by_id[root["parent_id"]]
+            event = {"at": _now(), "author": author.strip(), "status": status, "note": note.strip()}
+            root["status"] = status
+            root.setdefault("status_history", []).append(event)
+            _atomic_json(path, raw)
+        return next(item for item in self._comment_view(raw) if item["id"] == comment_id)
+
+    def add_comment(self, run_id: str, revision_id: str, text: str, anchor: str = "figure", author: str = "本地用户", parent_id: str | None = None, locator: Mapping[str, Any] | None = None) -> dict:
         if not isinstance(text, str) or not text.strip() or len(text) > 12000: raise ValueError("comment text must be non-empty and at most 12000 characters")
-        revision = self.get(run_id, revision_id); scene = json.loads((Path(revision["path"]) / "scene.json").read_text(encoding="utf-8"))
-        if anchor not in _ANCHORS and not (anchor.startswith("element:") and anchor[8:] in scene["elements"]): raise ValueError("unknown comment anchor")
+        revision = self.get(run_id, revision_id)
+        target = None if parent_id is not None else self._comment_target(revision, anchor, locator)
         if not isinstance(author, str) or not author.strip() or len(author) > 200: raise ValueError("comment author must be non-empty and at most 200 characters")
         if parent_id is not None: _safe_id(parent_id, "parent comment id")
         path = Path(revision["path"]) / "comments.json"
         with _lock(Path(revision["path"]) / ".comments.lock"):
-            comments = self.comments(run_id, revision_id)
-            if parent_id is not None and not any(c.get("id") == parent_id for c in comments): raise ValueError("parent comment does not exist")
-            comment = {"id": str(uuid4()), "revision_id": revision_id, "anchor": anchor, "author": author, "text": text.strip(), "parent_id": parent_id, "created_at": _now()}
-            _atomic_json(path, comments + [comment])
-        return comment
+            raw = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
+            by_id = {item.get("id"): item for item in raw}
+            root = None
+            if parent_id is not None:
+                if parent_id not in by_id: raise ValueError("parent comment does not exist")
+                root = by_id[parent_id]
+                seen = set()
+                while root.get("parent_id") is not None:
+                    if root.get("id") in seen or root.get("parent_id") not in by_id: raise ValueError("comment thread is malformed")
+                    seen.add(root.get("id")); root = by_id[root["parent_id"]]
+                target = {"anchor": root["anchor"], "locator": root.get("locator")}
+            comment = {"id": str(uuid4()), "revision_id": revision_id, "anchor": target["anchor"], "author": author.strip(), "text": text.strip(), "parent_id": parent_id, "created_at": _now()}
+            if target["locator"] is not None: comment["locator"] = target["locator"]
+            if root is not None and root.get("status", "open") == "resolved":
+                root["status"] = "open"
+                root.setdefault("status_history", []).append({"at": _now(), "author": author.strip(), "status": "open", "note": "reply added"})
+            _atomic_json(path, raw + [comment])
+        return self._comment_view(raw + [comment])[-1]
 
     @staticmethod
     def _render_html(path: Path, payload: dict, revision_id: str, run_id: str, frozen_inputs: list[dict]) -> None:

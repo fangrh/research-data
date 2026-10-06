@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ResearchData 校样定位审阅</title>
+<style>
+*{box-sizing:border-box}body{margin:0;color:#243342;background:#f6f7f9;font:14px system-ui,sans-serif}.tools{position:sticky;top:0;z-index:10;display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:9px 14px;background:#fff;border-bottom:1px solid #dbe4ea;color:#526273;font-size:12px}.tools button,.element-button,.location-button{border:1px solid #cfdee6;border-radius:6px;background:#fff;color:#24708b;padding:5px 9px;cursor:pointer}.tools button:hover,.element-button:hover,.location-button:hover{background:#eaf8fc}.tools #hint{flex:1;min-width:190px}.paper{max-width:900px;margin:14px auto;padding:26px 34px;background:white;box-shadow:0 1px 6px #1e3a4a12;border:1px solid #e1e7eb;font:15px/1.65 Georgia,"Times New Roman",serif}.paper h1{font-size:29px;line-height:1.3;margin:0 0 8px}.paper h2{font-size:17px;margin:20px 0 6px}.authors{color:#657483;font-size:13px}.meta,.footer{font:11px/1.5 system-ui;color:#718090;overflow-wrap:anywhere}.footer{border-top:1px solid #dbe4ea;margin-top:26px;padding-top:10px}.anchor{white-space:pre-wrap;cursor:text;outline:none}.anchor:hover,.anchor:focus-visible{background:#f4fbfe;box-shadow:0 0 0 3px #e3f5fc}.para{position:relative;margin:12px 0}.badges{display:flex;flex-wrap:wrap;gap:4px;margin:5px 0;font:12px system-ui}.location-button{padding:3px 7px}.location-button.resolved{color:#657483;background:#f2f5f6}.location-button.focused,.element-button.focused{box-shadow:0 0 0 2px #00aeec}.paper mark{background:#fff0ae;color:inherit;padding:0;cursor:pointer;border-bottom:2px solid #f2c947}.paper mark.resolved{background:#e9eef1;border-bottom-color:#a3b1bb}.paper mark.focused,.paper mark.pending{background:#cef2fc;border-bottom-color:#00aeec}.image-wrap{position:relative;line-height:0;margin:14px 0 8px;outline:none;cursor:crosshair}.image-wrap:focus-visible{box-shadow:0 0 0 3px #00aeec}.image-wrap img{width:100%;height:auto;display:block;user-select:none}.pin{position:absolute;transform:translate(-50%,-50%);z-index:2;width:25px;height:25px;border-radius:50%;border:2px solid white;background:#00aeec;color:white;box-shadow:0 1px 5px #172b4d50;font:bold 12px system-ui;cursor:pointer}.pin.resolved{background:#8296a2}.pin.focused{outline:3px solid #ffd653}.pin.pending{background:#ee8a32;pointer-events:none}.caption{font-size:13px;color:#526273}.double #body{column-count:2;column-gap:28px}.para{break-inside:avoid}.elements{font:12px system-ui;color:#526273;margin:18px 0}.elements summary{cursor:pointer;padding:5px 0}.element-list{display:flex;gap:5px;flex-wrap:wrap;margin-top:6px}.element-button{max-width:100%;overflow-wrap:anywhere;text-align:left}.body-location{font:11px system-ui;color:#718090}.selection-message{color:#23718f;font-weight:600}@media(max-width:600px){.paper{padding:20px 18px;margin:8px}.paper h1{font-size:23px}.double #body{column-count:1}.tools{padding:8px}.para{break-inside:auto}}
+</style></head><body>
+<div class="tools"><button id="whole">整份校样</button><span id="hint" role="status" aria-live="polite">选中文字、点击段落或图中位置，再填写右侧意见。</span></div>
+<article id="paper" class="paper" aria-label="可定位校样"></article>
+<script>
+'use strict';
+let state=null,identity='',lastFocus='';
+const paper=document.getElementById('paper'),hint=document.getElementById('hint');
+const post=data=>parent.postMessage({isStreamlitMessage:true,...data},'*');
+const emit=(action,data)=>post({type:'streamlit:setComponentValue',dataType:'json',value:{action,...data,revision_id:state.proof.revision_id,event_id:crypto.randomUUID()}});
+const cp=text=>Array.from(text);
+function node(tag,text,cls){const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;}
+function roots(){return state.threads.map(t=>({...t.root,number:t.number}));}
+function focus(id){emit('focus',{comment_id:id});}
+function select(anchor,locator=null){emit('select',{anchor,locator});}
+function part(anchor,text,start=0,tag='p'){
+  const wrap=node('div',undefined,'para'),p=node(tag,undefined,'anchor');p.dataset.anchor=anchor;p.dataset.start=String(start);p.tabIndex=0;
+  const chars=cp(text),end=start+chars.length,comments=roots().filter(c=>c.anchor===anchor);
+  const spans=comments.filter(c=>c.locator?.kind==='text'&&c.locator.start<end&&c.locator.end>start);
+  const pending=state.selection?.anchor===anchor&&state.selection.locator?.kind==='text'?state.selection.locator:null;
+  const cuts=new Set([0,chars.length]);for(const c of spans){cuts.add(Math.max(0,c.locator.start-start));cuts.add(Math.min(chars.length,c.locator.end-start));}
+  if(pending&&pending.start<end&&pending.end>start){cuts.add(Math.max(0,pending.start-start));cuts.add(Math.min(chars.length,pending.end-start));}
+  const offsets=[...cuts].sort((a,b)=>a-b);
+  for(let i=0;i<offsets.length-1;i++){
+    const a=offsets[i],b=offsets[i+1],value=chars.slice(a,b).join('');
+    const matching=spans.filter(c=>c.locator.start<=start+a&&c.locator.end>=start+b);
+    const chosen=matching.find(c=>c.id===state.focus)||matching[0];
+    const selected=pending&&pending.start<=start+a&&pending.end>=start+b;
+    if(chosen||selected){const mark=node('mark',value);if(chosen){mark.dataset.comment=chosen.id;mark.tabIndex=0;mark.setAttribute('role','button');mark.setAttribute('aria-label',`意见 ${chosen.number}：${chosen.text.slice(0,80)}`);mark.title=chosen.text;if(chosen.status==='resolved')mark.classList.add('resolved');if(chosen.id===state.focus)mark.classList.add('focused');}if(selected)mark.classList.add('pending');p.append(mark);}else p.append(document.createTextNode(value));
+  }
+  wrap.append(p);
+  const linked=comments.filter(c=>c.locator?.kind==='text'?c.locator.start<end&&c.locator.end>start:start===0);
+  if(linked.length){const badges=node('div',undefined,'badges');for(const c of linked){const b=node('button',`意见 ${String(c.number).padStart(2,'0')} · ${c.status==='resolved'?'已解决':'未处理'}`,'location-button');b.dataset.comment=c.id;if(c.status==='resolved')b.classList.add('resolved');if(c.id===state.focus)b.classList.add('focused');b.onclick=()=>focus(c.id);badges.append(b);}wrap.append(badges);}
+  return wrap;
+}
+function paragraphs(text){const items=[],breaks=/\n\s*\n/g;let begin=0,m;while((m=breaks.exec(text))!==null){if(m.index>begin)items.push({text:text.slice(begin,m.index),start:cp(text.slice(0,begin)).length});begin=m.index+m[0].length;}if(begin<text.length)items.push({text:text.slice(begin),start:cp(text.slice(0,begin)).length});return items;}
+function paint(){
+  const scroll=document.scrollingElement.scrollTop,p=state.proof,d=p.document;paper.replaceChildren();paper.classList.toggle('double',d.layout==='double');
+  paper.append(d.title?part('title',d.title,0,'h1'):node('h1','未命名校样'),node('p',d.authors||'','authors'),node('p',`校样 ${p.revision_id.slice(0,8)} · ${p.run_id}`,'meta'),node('h2','Abstract'),part('abstract',d.abstract||''));
+  const imgWrap=node('div',undefined,'image-wrap'),img=node('img');img.src=p.figure;img.alt='Figure 1';imgWrap.tabIndex=0;imgWrap.setAttribute('role','button');imgWrap.setAttribute('aria-label','Figure 1：点击位置添加意见，Enter 定位中心');imgWrap.append(img);
+  imgWrap.onclick=e=>{if(e.target.closest('button'))return;const r=img.getBoundingClientRect();if(r.width&&r.height)select('figure',{kind:'point',x:Math.max(0,Math.min(1,(e.clientX-r.left)/r.width)),y:Math.max(0,Math.min(1,(e.clientY-r.top)/r.height))});};
+  imgWrap.onkeydown=e=>{if(e.target===imgWrap&&e.key==='Enter'){e.preventDefault();select('figure',{kind:'point',x:.5,y:.5});}};
+  for(const c of roots().filter(c=>c.anchor==='figure'&&c.locator?.kind==='point')){const loc=c.locator;const pin=node('button',String(c.number),'pin');pin.style.left=`${loc.x*100}%`;pin.style.top=`${loc.y*100}%`;pin.dataset.comment=c.id;pin.setAttribute('aria-label',`图中意见 ${c.number} · ${c.status==='resolved'?'已解决':'未处理'}`);pin.title=c.text;if(c.status==='resolved')pin.classList.add('resolved');if(c.id===state.focus)pin.classList.add('focused');pin.onclick=e=>{e.stopPropagation();focus(c.id);};imgWrap.append(pin);}
+  if(state.selection?.anchor==='figure'&&state.selection.locator?.kind==='point'){const pin=node('span','+','pin pending');pin.style.left=`${state.selection.locator.x*100}%`;pin.style.top=`${state.selection.locator.y*100}%`;pin.setAttribute('aria-label','新的评论位置');imgWrap.append(pin);}
+  paper.append(imgWrap);const wholeFigure=roots().filter(c=>c.anchor==='figure'&&!c.locator);if(wholeFigure.length){const badges=node('div',undefined,'badges');for(const c of wholeFigure){const b=node('button',`意见 ${c.number} · Figure 1 全图`,'location-button');b.dataset.comment=c.id;b.onclick=()=>focus(c.id);badges.append(b);}paper.append(badges);}paper.append(d.caption?part('caption',d.caption,0,'figcaption'):node('figcaption','Figure 1','caption'));
+  const body=node('section');body.id='body';const parts=paragraphs(d.body||'');parts.forEach((p,i)=>{const wrap=part('body',p.text,p.start);wrap.dataset.paragraph=String(i+1);wrap.setAttribute('aria-label',`正文段落 ${i+1}`);body.append(wrap);});paper.append(body);
+  const elements=node('details',undefined,'elements');elements.append(node('summary','图形元素 · 按名称和稳定 ID 定位'));const list=node('div',undefined,'element-list');for(const el of p.elements){const b=node('button',`${el.name} · ${el.type}`,'element-button');b.dataset.anchor='element:'+el.id;b.title=el.id;b.onclick=()=>select('element:'+el.id);if(roots().some(c=>c.id===state.focus&&c.anchor==='element:'+el.id)){b.classList.add('focused');elements.open=true;}list.append(b);}elements.append(list);paper.append(elements,node('footer',`冻结校样 · SHA-256 ${p.payload_hash}\n定位和处理状态保存在审阅记录中，不改写 PDF / HTML 原稿。`,'footer'));
+  const broad=roots().filter(c=>c.anchor==='document'||c.anchor.startsWith('element:'));if(broad.length){const badges=node('div',undefined,'badges');for(const c of broad){const b=node('button',`意见 ${c.number} · ${c.anchor==='document'?'整份校样':'图形元素'}`,'location-button');b.dataset.comment=c.id;b.onclick=()=>focus(c.id);badges.append(b);}paper.append(badges);}
+  document.scrollingElement.scrollTop=scroll;
+  const f=`${state.focus||''}:${state.focus_token||0}`;
+  if(state.focus&&f!==lastFocus){const c=roots().find(c=>c.id===state.focus);const target=[...paper.querySelectorAll('[data-comment]')].find(n=>n.dataset.comment===state.focus)||(c?.anchor.startsWith('element:')?[...paper.querySelectorAll('.element-button')].find(n=>n.dataset.anchor===c.anchor):null);if(target)target.scrollIntoView({block:'center',behavior:'instant'});lastFocus=f;}else if(!state.focus)lastFocus=f;
+  hint.textContent=state.selection?'位置已选择，请在右侧填写并提交意见。':'选中文字、点击段落或图中位置，再填写右侧意见。';
+  post({type:'streamlit:setFrameHeight',height:750});
+}
+function chooseText(e){
+  const target=e.target instanceof Element?e.target:e.target.parentElement;
+  if(target.closest('button,.image-wrap,.elements'))return;
+  const selected=window.getSelection();
+  if(selected&&!selected.isCollapsed&&selected.rangeCount){const range=selected.getRangeAt(0),el=(range.startContainer.nodeType===1?range.startContainer:range.startContainer.parentElement).closest('.anchor');const tail=(range.endContainer.nodeType===1?range.endContainer:range.endContainer.parentElement).closest('.anchor');if(!el||el!==tail){hint.textContent='请在同一个段落内选取文字；也可直接点击段落。';return;}const before=document.createRange();before.selectNodeContents(el);before.setEnd(range.startContainer,range.startOffset);const start=Number(el.dataset.start)+cp(before.toString()).length,exact=range.toString();if(exact.trim())select(el.dataset.anchor,{kind:'text',start,end:start+cp(exact).length,exact});return;}
+  const mark=target.closest('mark[data-comment]');if(mark){focus(mark.dataset.comment);return;}
+  const el=target.closest('.anchor');if(el&&el.textContent.trim()){const start=Number(el.dataset.start),exact=el.textContent;select(el.dataset.anchor,{kind:'text',start,end:start+cp(exact).length,exact});}
+}
+paper.addEventListener('pointerup',chooseText);
+paper.addEventListener('keydown',e=>{if(e.key!=='Enter')return;const mark=e.target.closest('mark[data-comment]');if(mark){e.preventDefault();focus(mark.dataset.comment);return;}if(e.target.classList.contains('anchor')){e.preventDefault();const el=e.target,start=Number(el.dataset.start),exact=el.textContent;if(exact.trim())select(el.dataset.anchor,{kind:'text',start,end:start+cp(exact).length,exact});}});
+document.getElementById('whole').onclick=()=>select('document');
+window.addEventListener('message',e=>{if(e.source!==parent||e.data?.type!=='streamlit:render'||!e.data.args?.proof)return;state=e.data.args;const next=state.proof.run_id+'/'+state.proof.revision_id;if(next!==identity){document.scrollingElement.scrollTop=0;identity=next;lastFocus='';}paint();});
+post({type:'streamlit:componentReady',apiVersion:1});post({type:'streamlit:setFrameHeight',height:750});
+</script></body></html>

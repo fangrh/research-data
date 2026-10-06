@@ -37,6 +37,7 @@ ResearchData 借鉴 QCoDeS 的实验/run、参数、数据集与来源记录方�
 - 数据详情页支持本地编辑与 journal-style 校样：内置 Three Interact 可添加矢量内容、组件和 3D 视口，冻结带输入哈希的 HTML/PDF/场景 revision，并在图注或稳定元素 ID 上添加评论。详见 [编辑与校样](docs/PROOFS.md)。
 - 0.5.1 根据两个独立 agent 的实际使用改进入口、版本导航、保存进度、运行版本和命令指南；反馈与验证见 [使用评审](docs/AGENT-REVIEW.md)。
 - 0.5.2 将图形编辑、文章排版与校样审阅整合为同一个工作区，统一浅色外观与工具栏；参考网站、使用说明与截图见 [统一工作区](docs/UNIFIED_WORKSPACE.md)。
+- 0.5.3 增加校样文字定位、图中编号和线程的解决/重开操作，旧校样保持冻结；见 [定位校样与意见处理](docs/PROOF_REVIEW.md)。
 
 ## 安装并打开
 

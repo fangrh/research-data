@@ -12,7 +12,13 @@ from pathlib import Path
 
 
 def _emit(value):
-    print(json.dumps(value, ensure_ascii=False, indent=2, default=str))
+    rendered = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    try:
+        print(rendered)
+    except UnicodeEncodeError:
+        # Keep machine-readable output on legacy Windows consoles while
+        # retaining human-readable Unicode on streams that support it.
+        print(json.dumps(value, ensure_ascii=True, indent=2, default=str))
 
 
 def _json(value, default=None):
@@ -114,7 +120,7 @@ def parser():
     review.add_argument("--validation", choices=["not_checked", "partial", "passed", "failed"], help="Optional validation status to record with the review")
     review.add_argument("--validation-notes", default="", help="Notes stored with the validation update")
     proof = command("proof", "Edit local figure drafts, publish immutable journal proofs and review anchored comments")
-    proof.add_argument("operation", choices=["show", "save", "list", "publish", "comments", "comment", "check"], nargs="?", default="list")
+    proof.add_argument("operation", choices=["show", "save", "list", "publish", "comments", "comment", "comment-status", "check"], nargs="?", default="list")
     proof.add_argument("--run-id", required=True, help="Source run shown in the data browser")
     proof.add_argument("--revision", help="Exact immutable proof revision (required for comments/check)")
     proof.add_argument("--draft", help="Full proof-draft JSON file for save or publish; scene data never executes")
@@ -123,8 +129,12 @@ def parser():
     proof.add_argument("--text", default="", help="Comment text")
     proof.add_argument("--text-file", help="Read comment text from UTF-8 file")
     proof.add_argument("--anchor", default="figure", help="document/title/abstract/body/caption/figure or element:UUID")
+    proof.add_argument("--locator", help="JSON file containing a text or figure point locator")
     proof.add_argument("--author", default="本地用户", help="Local comment author")
     proof.add_argument("--reply-to", help="Comment id in the same revision")
+    proof.add_argument("--comment-id", help="Comment id for comment-status")
+    proof.add_argument("--status", choices=["all", "open", "resolved"], default="all", help="Filter comments, or set resolved/open with comment-status")
+    proof.add_argument("--note", default="", help="Status audit note for comment-status")
     proof.add_argument("--output", help="Write JSON result to this file (useful when inspecting/editing full drafts)")
     search = command("search", "Search descriptions, metadata and structured classifications")
     search.add_argument("query", nargs="?", default="")
@@ -294,10 +304,17 @@ def main(argv=None):
                 if not args.revision:
                     raise ValueError(f"proof {args.operation} requires --revision")
                 if args.operation == "comments":
-                    result = store.comments(args.run_id, args.revision)
+                    result = store.comments(args.run_id, args.revision, status=args.status)
                 elif args.operation == "comment":
                     text = Path(args.text_file).read_text(encoding="utf-8-sig") if args.text_file else args.text
-                    result = store.add_comment(args.run_id, args.revision, text, anchor=args.anchor, author=args.author, parent_id=args.reply_to)
+                    locator = _json(args.locator) if args.locator else None
+                    result = store.add_comment(args.run_id, args.revision, text, anchor=args.anchor, author=args.author, parent_id=args.reply_to, locator=locator)
+                elif args.operation == "comment-status":
+                    if not args.comment_id:
+                        raise ValueError("proof comment-status requires --comment-id")
+                    if args.status == "all":
+                        raise ValueError("proof comment-status requires --status open or resolved")
+                    result = store.set_comment_status(args.run_id, args.revision, args.comment_id, args.status, author=args.author, note=args.note)
                 else:
                     result = store.get(args.run_id, args.revision)
                     result = {"ok": True, "revision_id": result["revision_id"], "analysis_run_id": result["analysis_run_id"], "files": result["files"]}

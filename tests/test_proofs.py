@@ -133,3 +133,72 @@ def test_scene_layer_order_survives_draft_and_revision(tmp_path):
     assert list(frozen['elements']) == list(scene['elements'])
     payload['scene']['elements'] = dict(reversed(list(scene['elements'].items())))
     assert store.save_draft(run_id, payload, expected_hash=saved['hash'])['hash'] != saved['hash']
+
+
+def test_comment_locators_use_unicode_codepoint_offsets_and_reply_inherits_target(tmp_path):
+    root, run_id, artifact = _input(tmp_path)
+    scene, eid = _scene(); store = ProofStore(root)
+    payload = _payload(run_id, artifact, scene, eid)
+    payload["document"]["body"] = "温度😀\n第二行"
+    revision = store.publish(run_id, payload)
+    target = store.comment_target(run_id, revision["revision_id"], "body", {"kind": "text", "start": 2, "end": 3, "exact": "😀"})
+    assert target["locator"]["exact"] == "😀"
+    comment = store.add_comment(run_id, revision["revision_id"], "check", anchor="body", locator=target["locator"])
+    reply = store.add_comment(run_id, revision["revision_id"], "done", anchor="figure", parent_id=comment["id"])
+    assert reply["thread_id"] == comment["id"]
+    assert reply["anchor"] == "body" and reply["locator"] == comment["locator"]
+
+
+def test_comment_locators_reject_invalid_shapes_and_frozen_text_mismatch(tmp_path):
+    root, run_id, artifact = _input(tmp_path)
+    scene, eid = _scene(); store = ProofStore(root)
+    revision = store.publish(run_id, _payload(run_id, artifact, scene, eid))
+    rid = revision["revision_id"]
+    bad = [
+        ("body", {"kind": "text", "start": True, "end": 1, "exact": "P"}),
+        ("body", {"kind": "text", "start": 0, "end": 1, "exact": "X", "extra": 1}),
+        ("body", {"kind": "text", "start": 0, "end": 1, "exact": "X"}),
+        ("body", {"kind": "text", "start": 1, "end": 1, "exact": ""}),
+        ("figure", {"kind": "point", "x": float("nan"), "y": .5}),
+        ("caption", {"kind": "point", "x": .5, "y": .5}),
+        ("figure", {"kind": "point", "x": .5, "y": .5, "extra": 0}),
+    ]
+    for anchor, locator in bad:
+        with pytest.raises(ValueError):
+            store.comment_target(run_id, rid, anchor, locator)
+    with pytest.raises(ValueError):
+        store.comment_target(run_id, rid, None)
+
+
+def test_legacy_comments_read_as_open_without_sidecar_rewrite(tmp_path):
+    root, run_id, artifact = _input(tmp_path)
+    scene, eid = _scene(); store = ProofStore(root)
+    revision = store.publish(run_id, _payload(run_id, artifact, scene, eid))
+    path = root / "proofs" / run_id / revision["revision_id"] / "comments.json"
+    legacy = [{"id": str(uuid4()), "revision_id": revision["revision_id"], "anchor": "figure", "author": "old", "text": "legacy", "parent_id": None, "created_at": "2026-01-01T00:00:00+00:00"}]
+    path.write_text(json.dumps(legacy, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    before = path.read_bytes()
+    viewed = store.comments(run_id, revision["revision_id"])
+    assert viewed[0]["status"] == "open" and viewed[0]["thread_id"] == legacy[0]["id"]
+    assert path.read_bytes() == before
+
+
+def test_thread_status_reopen_and_cross_revision_reply_isolation(tmp_path):
+    root, run_id, artifact = _input(tmp_path)
+    scene, eid = _scene(); store = ProofStore(root)
+    first = store.publish(run_id, _payload(run_id, artifact, scene, eid))
+    second = store.publish(run_id, _payload(run_id, artifact, scene, eid, "second"))
+    root_comment = store.add_comment(run_id, first["revision_id"], "open", anchor="figure")
+    reply = store.add_comment(run_id, first["revision_id"], "reply", parent_id=root_comment["id"])
+    with pytest.raises(ValueError, match="parent comment"):
+        store.add_comment(run_id, second["revision_id"], "wrong revision", parent_id=root_comment["id"])
+    frozen = {name: (root / "proofs" / run_id / first["revision_id"] / name).read_bytes() for name in ("manifest.json", "scene.json", "document.json", "report.html", "report.pdf")}
+    resolved = store.set_comment_status(run_id, first["revision_id"], reply["id"], "resolved", author="reviewer", note="fixed")
+    assert resolved["thread_id"] == root_comment["id"] and resolved["status"] == "resolved"
+    reopened = store.add_comment(run_id, first["revision_id"], "follow-up", parent_id=reply["id"], author="reviewer")
+    assert reopened["status"] == "open"
+    root_view = next(item for item in store.comments(run_id, first["revision_id"]) if item["id"] == root_comment["id"])
+    assert [event["status"] for event in root_view["status_history"]] == ["resolved", "open"]
+    assert set(root_view["status_history"][0]) == {"at", "author", "status", "note"}
+    assert store.comments(run_id, first["revision_id"], status="resolved") == []
+    assert all((root / "proofs" / run_id / first["revision_id"] / name).read_bytes() == data for name, data in frozen.items())
