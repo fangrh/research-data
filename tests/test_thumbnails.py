@@ -46,3 +46,20 @@ def test_object_column_of_numeric_lists_becomes_series():
     series = pick_series(ds)
     assert series and series[0][0] == "real" and series[0][1].size == 10
     assert cover_for_dataset(ds) is not None
+
+
+def test_series_for_artifact_big_csv_head_and_fingerprint():
+    import numpy as np
+    from research_data.thumbnails import fingerprint_series, series_for_artifact
+    big = tmp_path_factory_skip = None
+    import tempfile, os
+    from pathlib import Path
+    with tempfile.TemporaryDirectory() as td:
+        p = Path(td) / "big.csv"
+        rows = "\n".join(f"{i},{np.sin(i/50):.6f}" for i in range(200000))  # ~2MB+
+        p.write_text("t,v\n" + rows, encoding="utf-8")
+        series = series_for_artifact(p)
+        assert series is not None and series[0].size >= 2
+        fp = fingerprint_series({"file_count": 12, "total_bytes": 3400, "note": "x"})
+        assert fp is not None and fp.size == 2
+        assert fingerprint_series({"note": "x"}) is None

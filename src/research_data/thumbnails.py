@@ -7,6 +7,7 @@ runtime dependencies beyond Pillow (already required by Streamlit).
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -76,10 +77,12 @@ def _to_path(arr: np.ndarray) -> list[tuple[float, float]]:
             for i, v in enumerate(arr.tolist())]
 
 
-def draw_sparkline(series: list[np.ndarray], badge: str | None = None) -> bytes:
+def draw_sparkline(series: list[np.ndarray], badge: str | None = None,
+                   accent: tuple = LINE) -> bytes:
     """Render one or two normalized series onto a dark cover PNG.
 
     badge (Bilibili 时长徽章式) is drawn bottom-right over a dark chip.
+    accent overrides the primary line color (参数指纹用蓝色区分).
     """
     base = Image.new("RGBA", (WIDTH, HEIGHT), BG + (255,))
     overlay = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
@@ -88,7 +91,7 @@ def draw_sparkline(series: list[np.ndarray], badge: str | None = None) -> bytes:
         draw.line([(8, y), (WIDTH - 8, y)], fill=GRID, width=1)
     for k, arr in enumerate(series[:2]):
         pts = _to_path(arr)
-        color = LINE if k == 0 else LINE_DARK
+        color = accent if k == 0 else LINE_DARK
         if len(pts) == 1:
             x, y = pts[0]
             draw.ellipse([x - 4, y - 4, x + 4, y + 4], fill=color)
@@ -127,3 +130,49 @@ def cover_for_dataset(ds) -> bytes | None:
     if not series:
         return None
     return draw_sparkline([arr for _, arr in series])
+
+
+def series_for_artifact(path) -> list[np.ndarray] | None:
+    """Drawable series for one artifact file; big CSV/TSV read head-only."""
+    p = Path(path)
+    fmt = p.suffix.lower().lstrip(".")
+    if fmt in {"csv", "tsv"}:
+        import pandas as pd
+        from research_data.adapters import _dataset_from_frame
+        try:
+            frame = pd.read_csv(p, sep="\t" if fmt == "tsv" else ",", nrows=256)
+            picked = pick_series(_dataset_from_frame(frame, {}))
+            return [arr for _, arr in picked] if picked else None
+        except Exception:
+            return None
+    try:
+        if p.stat().st_size > 2_000_000:
+            return None
+        from research_data.adapters import load_file
+        picked = pick_series(load_file(p))
+        return [arr for _, arr in picked] if picked else None
+    except Exception:
+        return None
+
+
+def fingerprint_series(parameters: dict) -> np.ndarray | None:
+    """Normalized numeric-parameter values as a last-resort cover series."""
+    values: list[float] = []
+
+    def walk(node):
+        if isinstance(node, bool):
+            return
+        if isinstance(node, (int, float)):
+            values.append(float(node))
+        elif isinstance(node, dict):
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, (list, tuple)):
+            for v in node:
+                walk(v)
+
+    walk(parameters or {})
+    finite = [v for v in values if np.isfinite(v)]
+    if len(finite) < 2:
+        return None
+    return np.asarray(finite, dtype=float)

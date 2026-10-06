@@ -176,22 +176,38 @@ def main(root: str | None = None) -> None:
             st.session_state["up_filter"] = {"field": field, "value": up_param}
 
     @st.cache_data(show_spinner=False, max_entries=600)
-    def _cover_png(catalog_root: str, run_id: str, badge: str = ""):
-        """数据封面缩略图（缓存；不可绘制时返回 None 走占位卡）。"""
+    def _cover_png(catalog_root: str, run_id: str, badge: str = "", fp_key: str = ""):
+        """数据封面缩略图（缓存）。逐个尝试 run 内小文件（大 CSV 只读头部 256 行）；
+        都不可绘制时用参数指纹（蓝色）兜底；仍无则 None 走占位卡。"""
         try:
-            from research_data.catalog import Catalog
-            from research_data.thumbnails import cover_for_dataset, draw_sparkline, pick_series
+            from research_data.catalog import Catalog, _inside
+            from research_data.thumbnails import draw_sparkline, fingerprint_series, series_for_artifact
             cat = Catalog(catalog_root)
-            art = cat.select_artifact(run_id)
-            if (art.get("size_bytes") or 0) > 2_000_000:
-                return None
-            ds = cat.load_dataset(run_id, artifact_id=art.get("artifact_id"))
-            picked = pick_series(ds)
-            if not picked:
-                return None
-            return draw_sparkline([arr for _, arr in picked], badge=badge or None)
+            manifest = cat.get(run_id)
+            run_dir = cat.root / "runs" / run_id
+            candidates = sorted(manifest.get("artifacts", []),
+                                key=lambda a: a.get("size_bytes") or 0)[:8]
+            for art in candidates:
+                if (art.get("size_bytes") or 0) > 20_000_000:
+                    continue
+                try:
+                    path = _inside(run_dir, art["path"])
+                except ValueError:
+                    continue
+                series = series_for_artifact(path)
+                if series:
+                    return draw_sparkline(series, badge=badge or None), "data"
+            if fp_key:
+                import json as _json
+                try:
+                    fp = fingerprint_series(_json.loads(fp_key))
+                except ValueError:
+                    fp = None
+                if fp is not None:
+                    return draw_sparkline([fp], badge=badge or None, accent=(112, 158, 255)), "fingerprint"
+            return None, "none"
         except Exception:
-            return None
+            return None, "none"
 
     with st.expander("首次导入 / Import profile", expanded=not bool(runs)):
         st.caption("填写文件路径和 JSON mapping；配置会作为 artifact profile 保存。")
@@ -313,7 +329,8 @@ def main(root: str | None = None) -> None:
                 badge = (f"{human_count(fc)}文件" if fc is not None else
                          (f"{human_count((r.get('parameters') or {}).get('total_bytes', 0) / 1e6)}MB"
                           if (r.get("parameters") or {}).get("total_bytes") else ""))
-                png = _cover_png(str(root), r["run_id"], badge)
+                png, mode = _cover_png(str(root), r["run_id"], badge,
+                                       fp_key=json.dumps(r.get("parameters") or {}, sort_keys=True, default=str))
                 href = f"?pick={r['run_id']}" + (f"&up={quote(up_filter['value'], safe='')}" if up_filter else "")
                 title_html = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
                 if png:
@@ -329,6 +346,8 @@ def main(root: str | None = None) -> None:
                                 f"<div style='height:{int(180*0.56)}px;border-radius:8px;background:#17171f;"
                                 f"display:flex;align-items:center;justify-content:center;gap:8px;color:#666;"
                                 f"font-size:22px;'>📊 {chip}</div></a>", unsafe_allow_html=True)
+                if mode == "fingerprint":
+                    st.caption("¶ 参数指纹封面")
                 cats = r.get("categories") if isinstance(r.get("categories"), dict) else {}
                 up = cats.get("generator") or cats.get("site") or r.get("project") or ""
                 stats = []
