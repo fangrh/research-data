@@ -20,6 +20,7 @@ _INTENT = {
     "register": "Attach an existing file to a previously recorded run.",
     "import": "Register historical data while keeping unknown provenance explicit.",
     "finish": "Record execution outcome separately from scientific validation.",
+    "collection": "Organize related runs with reference-only many-to-many collections; source and run provenance stay intact.",
     "article": "Prepare and check the mandatory article describing a dataset, its formulas and managed figures.",
     "submit": "Formally submit data only with a complete, integrity-checked article and frozen provenance receipt.",
     "review": "Agent review dispatch: list/show pending user-review requests and complete them.",
@@ -72,6 +73,7 @@ _EXAMPLES = {
     "run": "research-data run --title TITLE --repo SOURCE_ROOT --source SCRIPT -- python SCRIPT",
     "proof": "research-data proof list --run-id RUN_ID",
     "import": "research-data import DATA_FILE --title TITLE --project PROJECT --profile PROFILE_JSON",
+    "collection": "research-data collection create --title 'Sweep comparison' --description 'Reference-only grouping' --tag transport --run RUN_ID_1 --run RUN_ID_2",
     "plot": "research-data plot RUN_ID --recipe recipe.json --output figure.html",
     "browse": "research-data browse",
     "open": "research-data open",
@@ -82,7 +84,7 @@ _EXAMPLES = {
 
 _GROUPS = {
     "startup": ["open", "status", "stop", "serve", "browse"],
-    "data": ["init", "start", "run", "register", "import", "finish", "article", "submit", "validation"],
+    "data": ["init", "start", "run", "register", "import", "finish", "article", "submit", "validation", "collection"],
     "search": ["search", "show", "check", "rebuild"],
     "review": ["review", "proof"],
     "plot": ["plot", "profile", "themes", "project"],
@@ -118,6 +120,13 @@ _WORKFLOWS = {
         "decision": "Use a profile when variable names, units, or coordinates are known; retain unknown source identity when it is not.",
         "example": _EXAMPLES["import"],
         "notes": ["Do not infer physical meaning from shape alone.", "Use --repo/--source only when provenance is supported."],
+    },
+    "collection": {
+        "purpose": "Group related runs by explicit reference and membership metadata while preserving each run's source, Git and article/proof records.",
+        "steps": ["search", "show", "collection", "open"],
+        "decision": "Use collection when the relationship is descriptive or organizational; add explicit roles and notes. Do not infer scientific causation or automatically catalog runs together.",
+        "example": _EXAMPLES["collection"],
+        "notes": ["Collections are many-to-many references; missing or historical run IDs remain visible in the member list so the relationship is not silently lost.", "Use archive and restore to hide or recover a collection without deleting members. Reorder requires the exact current member permutation.", "Mutations accept --expected-hash to protect concurrent edits. The Web catalog exposes a 合集 entry and each run's 所属合集 memberships."],
     },
     "plot": {
         "purpose": "Create a reproducible figure from registered datasets.",

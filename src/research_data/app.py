@@ -327,7 +327,9 @@ def _browse_order(runs, order):
 
 
 def _search_home(st):
-    for key in ("pick", "up", "fav"):
+    if st.query_params.get("collections") == "1" or st.query_params.get("collection"):
+        return
+    for key in ("pick", "up", "fav", "view", "from_collection"):
         st.query_params.pop(key, None)
     st.session_state.pop("card_pick", None)
     st.session_state.pop("up_filter", None)
@@ -385,9 +387,11 @@ def main(root: str | None = None) -> None:
         head_l, head_m, head_r = st.columns([1.5, 2.2, .7], vertical_alignment="center")
         with head_l:
             st.markdown(header_html(home_url, browse_url(context, fav="1"),
-                                   "favorites" if params.get("fav") == "1" else "home"), unsafe_allow_html=True)
+                                   "collections" if params.get("collections") == "1" or params.get("collection") else
+                                   "favorites" if params.get("fav") == "1" else "home",
+                                   browse_url(context, collections="1")), unsafe_allow_html=True)
         with head_m:
-            query = st.text_input("搜索标题 / 描述 / 标签", placeholder="搜索数据、项目、标签或源代码…",
+            query = st.text_input("搜索标题 / 描述 / 标签", placeholder="搜索合集、数据、项目、标签或源代码…",
                                   label_visibility="collapsed", on_change=_search_home, args=(st,))
         with head_r:
             settings = st.popover("管理 / 导入", use_container_width=True)
@@ -526,6 +530,10 @@ def main(root: str | None = None) -> None:
                     run = catalog.start_run(title, kind="experiment", parameters={"profile": profile})
                     run.add_artifact(path, role="raw", profile=profile); run.finish(); st.success("已登记；刷新筛选即可查看。"); st.rerun()
                 except Exception as exc: st.error(f"导入失败：{exc}")
+    if params.get("collections") == "1" or params.get("collection"):
+        from research_data.collection_ui import render as render_collections
+        render_collections(st, catalog, runs, context, query=query, collection_id=params.get("collection"))
+        return
     if not runs:
         st.markdown(hero_html(0, 0), unsafe_allow_html=True)
         st.info("资料库还没有数据。点击右上角“管理 / 导入”添加数据，或用 research-data run 登记计算。")
@@ -657,15 +665,22 @@ def main(root: str | None = None) -> None:
     selected_runs = [catalog.get(r["run_id"]) for r in chosen_summaries]
     identity = tuple(r["run_id"] for r in selected_runs); _reset_on_run_change(st, identity)
     run = catalog.get(current["run_id"])
+    from research_data.collection_ui import render_memberships
+    render_memberships(st, catalog, run, context)
 
     # ── 视频页布局：左侧数据卡+互动+评论，右侧相关推荐（Bilibili 式）──
     workspace_key = f"workspace_{run['run_id']}"
     from research_data.articles import ArticleStore
     has_article = ArticleStore(catalog.root).draft(run['run_id']) is not None
-    initial_workspace = '编辑与校样' if st.query_params.get('view') == 'proof' else '数据文章' if st.query_params.get('view') == 'article' or has_article else '数据与绘图'
+    initial_workspace = ('编辑与校样' if st.query_params.get('view') == 'proof' else
+                         '数据与绘图' if st.query_params.get('view') == 'data' else
+                         '数据文章' if st.query_params.get('view') == 'article' or has_article else '数据与绘图')
     with st.container(key="rd_workspaces"):
         back, modes = st.columns([1, 5], vertical_alignment="center")
-        back.markdown(f"<a class='rd-back' href='{home_url.replace('&', '&amp;')}' target='_self'>← 返回首页</a>", unsafe_allow_html=True)
+        origin_collection = params.get("from_collection")
+        back_url = browse_url(context, collection=origin_collection) if origin_collection else home_url
+        back_label = "← 返回合集" if origin_collection else "← 返回首页"
+        back.markdown(f"<a class='rd-back' href='{back_url.replace('&', '&amp;')}' target='_self'>{back_label}</a>", unsafe_allow_html=True)
         with modes:
             workspace = st.segmented_control("工作区", ["数据文章", "数据与绘图", "编辑与校样"], default=initial_workspace, key=workspace_key, label_visibility="collapsed")
     proof_mode = workspace == "编辑与校样"

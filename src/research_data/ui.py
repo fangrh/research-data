@@ -93,7 +93,7 @@ def browse_url(context: Mapping[str, object] | None = None, **changes: object) -
     """Build a same-page browse link while retaining only browse context.
 
     ``catalog`` and ``project_dir`` come from the current context.  The three
-    navigation keys (``pick``, ``up``, and ``fav``) are explicitly supplied by
+    navigation keys (including collections and workspaces) are explicitly supplied by
     callers; ``None`` removes a key.  Other query parameters are discarded so
     widget state never leaks into card links.
     """
@@ -103,7 +103,7 @@ def browse_url(context: Mapping[str, object] | None = None, **changes: object) -
         value = _query_value(source, key)
         if value not in (None, ""):
             query[key] = str(value)
-    for key in ("pick", "up", "fav"):
+    for key in ("pick", "up", "fav", "collections", "collection", "from_collection", "view"):
         if key in changes and changes[key] not in (None, ""):
             value = changes[key]
             if isinstance(value, (list, tuple)):
@@ -112,11 +112,13 @@ def browse_url(context: Mapping[str, object] | None = None, **changes: object) -
     return "./?" + urlencode(query) if query else "./"
 
 
-def header_html(home_url: str, fav_url: str, active: str = "home") -> str:
+def header_html(home_url: str, fav_url: str, active: str = "home", collections_url: str | None = None) -> str:
     """Return brand and navigation only; search/settings stay native widgets."""
-    active = active if active in {"home", "favorites"} else "home"
+    active = active if active in {"home", "favorites", "collections"} else "home"
     home_class = " rd-nav-active" if active == "home" else ""
     fav_class = " rd-nav-active" if active == "favorites" else ""
+    collection_link = (f"<a class='rd-nav-link{' rd-nav-active' if active == 'collections' else ''}' "
+                       f"href='{_href(collections_url)}' target='_self'>合集</a>") if collections_url else ""
     return (
         "<header class='rd-header'>"
         f"<a class='rd-brand' href='{_href(home_url)}' target='_self' aria-label='研究数据首页'>"
@@ -124,6 +126,7 @@ def header_html(home_url: str, fav_url: str, active: str = "home") -> str:
         "<nav class='rd-nav' aria-label='主导航'>"
         f"<a class='rd-nav-link{home_class}' href='{_href(home_url)}' target='_self'>首页</a>"
         f"<a class='rd-nav-link{fav_class}' href='{_href(fav_url)}' target='_self'>收藏</a>"
+        f"{collection_link}"
         "</nav></header>"
     )
 

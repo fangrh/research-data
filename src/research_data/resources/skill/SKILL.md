@@ -100,6 +100,25 @@ Use `plot` with registered run IDs and a saved recipe. The browser is `browse`; 
 
 Keep execution status separate from scientific validation. Mark validation passed only with explicit evidence. Software tests and successful process exits do not establish convergence or physical support.
 
+## Organize related runs with collections
+
+Use collections for explicit, reference-only many-to-many organization:
+
+```text
+research-data help collection --json
+research-data guide collection --json
+research-data collection create --title TITLE --description DESCRIPTION --run RUN_ID_1 --run RUN_ID_2
+research-data collection add --id COLLECTION_ID --run-id RUN_ID --role ROLE --note NOTE --expected-hash HASH
+```
+
+A collection preserves each run's source/Git provenance, article and proof;
+it does not infer scientific causation or automatically group runs. Keep
+roles and notes explicit. Missing or historical members remain visible. Use
+`collection archive`/`restore`, `collection reorder` with the exact complete
+permutation, and `--expected-hash` for concurrent edit protection. The Web
+catalog exposes a 合集 entry and each run's 所属合集 memberships. See
+`docs/COLLECTIONS.md` for all operations and JSON output.
+
 Return the run IDs, catalog location and figure/data links. `check` verifies recorded bytes; `rebuild` reconstructs the SQLite index from manifests. Do not migrate, delete or publish unrelated existing datasets without the user's scope.
 
 ## Registration interview fields

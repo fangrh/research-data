@@ -39,6 +39,7 @@ ResearchData 借鉴 QCoDeS 的实验/run、参数、数据集与来源记录方�
 - 0.5.2 将图形编辑、文章排版与校样审阅整合为同一个工作区，统一浅色外观与工具栏；参考网站、使用说明与截图见 [统一工作区](docs/UNIFIED_WORKSPACE.md)。
 - 0.5.3 增加校样文字定位、图中编号和线程的解决/重开操作，旧校样保持冻结；见 [定位校样与意见处理](docs/PROOF_REVIEW.md)。
 - 0.6 增加数据文章模板、完整性检查和带 receipt/revision 的正式提交；公式使用离线 MathText，受管 PNG/JPEG 图和文章可带入新校样；见 [数据文章与正式提交](docs/ARTICLES.md)。
+- Collections provide explicit, reference-only many-to-many organization for related runs while preserving source/Git, article and proof records; see [Collections](docs/COLLECTIONS.md).
 
 ## 安装并打开
 
@@ -74,6 +75,8 @@ research-data.cmd open
 research-data status
 research-data help run --json
 research-data guide generate
+research-data help collection --json
+research-data guide collection --json
 ```
 
 `open` 启动托管的本机服务并打开浏览器；`serve` 在前台运行并支持 Ctrl+C，
@@ -82,6 +85,19 @@ research-data guide generate
 console entrypoint 仍是 `research-data open`。需要桌面快捷方式时可运行
 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\desktop-shortcut.ps1`。
 详见 [docs/USAGE.md](docs/USAGE.md)。
+
+### 运行合集
+
+合集只保存用户明确提供的运行引用、关系角色和说明，不会自动推断因果关系或自动把运行归档到一起。一个合集可以包含多个运行，一个运行也可以属于多个合集；原始源码/Git 来源、数据文章和校样保持在各自运行中。
+
+```powershell
+research-data --root D:/research-data-library collection create --title "Cooldown comparison" --description "Reference-only grouping" --tag transport --run RUN_ID_1 --run RUN_ID_2
+research-data --root D:/research-data-library collection add --id COLLECTION_ID --run-id RUN_ID_3 --role comparison --note "same campaign" --expected-hash HASH
+research-data --root D:/research-data-library collection memberships --run-id RUN_ID_1
+research-data --root D:/research-data-library collection archive --id COLLECTION_ID --expected-hash HASH
+```
+
+使用 `collection show --id COLLECTION_ID` 读取 `hash` 和成员顺序；编辑时传入 `--expected-hash` 可防止并发覆盖，`reorder` 必须提供完整且无重复的成员排列。历史或缺失运行仍在成员列表中可见，`restore` 可恢复已归档合集。网页中可从“合集”入口浏览，并在运行详情的“所属合集”查看关系。完整命令见 [docs/COLLECTIONS.md](docs/COLLECTIONS.md)。
 
 ## 让 agent 默认使用
 

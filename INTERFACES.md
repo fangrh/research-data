@@ -1,5 +1,23 @@
 # Shared implementation contract
 
+## Related-run collections (v0.7)
+
+`research_data.collections.CollectionStore(root)` owns schema-version-1 JSON
+under `collections/<collection_id>.json`. It exposes `create`, `get`, `list`,
+`update`, `add`, `remove`, `reorder`, `archive` and `memberships`. Metadata has
+`title`, `description`, `tags`, `archived`, creation/update timestamps and
+ordered `members` containing `run_id`, `role`, `note` and `added_at`.
+
+Returned `hash` is the SHA-256 of the same byte snapshot used to parse the
+record. Mutations accept `expected_hash`; stale writes fail. Omitted role/note
+in `add` preserve existing annotations; explicit empty strings clear them.
+Adding requires an existing run; missing historical references remain readable
+and removable. Reorder takes an exact permutation. Archive is reversible.
+
+The collection lock and atomic writes protect organizer state. Collection
+membership does not copy or mutate runs, provenance, articles, proofs or
+scientific validation. See [COLLECTIONS.md](docs/COLLECTIONS.md) for CLI and UI.
+
 ## Structured data articles (v0.6)
 
 `ArticleStore(root)` owns `template`, `draft`, `save(expected_hash=...)`, `check`,

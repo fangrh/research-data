@@ -170,6 +170,21 @@ def parser():
     profile = command("profile", "Save a reusable import mapping")
     profile.add_argument("name")
     profile.add_argument("json", help="Mapping JSON or JSON file")
+    collection = command("collection", "Organize related runs with reference-only many-to-many collections")
+    collection.add_argument("operation", choices=["create", "list", "show", "edit", "add", "remove", "reorder", "archive", "restore", "memberships"], nargs="?", default="list")
+    collection.add_argument("--id", help="Collection ID for show/edit/member mutations")
+    collection.add_argument("--run-id", help="Run ID for add/remove or memberships")
+    collection.add_argument("--run", dest="run_ids", action="append", default=[], help="Run ID; repeat to define initial or exact reorder order")
+    collection.add_argument("--title", help="Collection title")
+    collection.add_argument("--description", help="Collection description")
+    collection.add_argument("--tag", action="append", default=None, help="Collection tag; repeat for multiple tags")
+    collection.add_argument("--clear-tags", action="store_true", help="Clear all tags when editing")
+    collection.add_argument("--role", default=None, help="Explicit membership role (for example baseline or comparison); omit to preserve an existing role")
+    collection.add_argument("--note", default=None, help="Explicit membership note; omit to preserve an existing note")
+    collection.add_argument("--query", default="", help="Search collection title, description and tags")
+    collection.add_argument("--include-archived", action="store_true", help="Include archived collections or memberships")
+    collection.add_argument("--expected-hash", help="Expected collection hash for concurrent edit protection")
+    collection.add_argument("--output", help="Write the JSON result to this UTF-8 file")
     command("themes", "List selectable plot styles")
     project = command("project", "Initialize, inspect, validate or save Git-trackable project templates")
     project.add_argument("operation", choices=["init", "show", "check", "save-plot"], nargs="?", default="show")
@@ -475,6 +490,54 @@ def main(argv=None):
             _emit(cat.set_validation(args.run_id, args.status, evidence=args.evidence, notes=args.notes))
         elif args.action == "profile":
             _emit({"profile": str(cat.save_recipe("import-" + args.name, _json(args.json)))})
+        elif args.action == "collection":
+            from .collections import CollectionStore
+            store = CollectionStore(cat.root)
+            operation = args.operation
+            if operation == "create":
+                if not args.title:
+                    raise ValueError("collection create requires --title")
+                result = store.create(args.title, description=args.description or "", tags=args.tag, run_ids=args.run_ids)
+            elif operation == "list":
+                result = store.list(args.query, include_archived=args.include_archived)
+            elif operation == "show":
+                if not args.id:
+                    raise ValueError("collection show requires --id")
+                result = store.get(args.id)
+            elif operation == "edit":
+                if not args.id:
+                    raise ValueError("collection edit requires --id")
+                if args.clear_tags and args.tag is not None:
+                    raise ValueError("collection edit cannot combine --clear-tags and --tag")
+                tags = [] if args.clear_tags else args.tag
+                result = store.update(args.id, title=args.title, description=args.description, tags=tags,
+                                      expected_hash=args.expected_hash)
+            elif operation == "add":
+                if not args.id or not args.run_id:
+                    raise ValueError("collection add requires --id and --run-id")
+                result = store.add(args.id, args.run_id, role=args.role, note=args.note, expected_hash=args.expected_hash)
+            elif operation == "remove":
+                if not args.id or not args.run_id:
+                    raise ValueError("collection remove requires --id and --run-id")
+                result = store.remove(args.id, args.run_id, expected_hash=args.expected_hash)
+            elif operation == "reorder":
+                if not args.id:
+                    raise ValueError("collection reorder requires --id")
+                if not args.run_ids:
+                    raise ValueError("collection reorder requires at least one --run")
+                result = store.reorder(args.id, args.run_ids, expected_hash=args.expected_hash)
+            elif operation in ("archive", "restore"):
+                if not args.id:
+                    raise ValueError(f"collection {operation} requires --id")
+                result = store.archive(args.id, archived=(operation == "archive"), expected_hash=args.expected_hash)
+            else:
+                if not args.run_id:
+                    raise ValueError("collection memberships requires --run-id")
+                result = store.memberships(args.run_id, include_archived=args.include_archived)
+            if args.output:
+                destination = Path(args.output).expanduser().resolve()
+                destination.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+            _emit(result)
         elif args.action == "plot":
             _plot(cat, args)
         elif args.action == "themes":
