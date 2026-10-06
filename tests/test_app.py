@@ -8,6 +8,59 @@ def test_app_import_is_lazy_and_plotting_is_available():
     assert callable(app.cli)
 
 
+def test_recommendations_balance_projects_without_mutating_runs():
+    from research_data.app import _browse_order
+    runs = [{"run_id": str(i), "project": project, "created_at": str(i)}
+            for i, project in enumerate(["B", "A", "A", "A"])]
+    original = list(runs)
+    assert [r["run_id"] for r in _browse_order(runs, "推荐")] == ["3", "0", "2", "1"]
+    assert runs == original
+    assert [r["run_id"] for r in _browse_order(runs, "最新优先")] == ["3", "2", "1", "0"]
+
+
+def test_browse_context_unicode_channels_primary_detail_and_search(tmp_path, monkeypatch):
+    import json
+    import sys
+    from research_data.catalog import Catalog
+    from streamlit.testing.v1 import AppTest
+    from research_data.project import ProjectTemplates
+    monkeypatch.setattr(sys, "argv", ["streamlit"])
+    default = Catalog(tmp_path / "default")
+    chosen = Catalog(tmp_path / "chosen")
+    project = tmp_path / "templates"
+    ProjectTemplates.initialize(project)
+    monkeypatch.setenv("RESEARCH_DATA_CATALOG", str(default.root))
+    source = tmp_path / "curve.csv"
+    source.write_text("x,y\n1,2\n2,4\n", encoding="utf-8")
+    runs = []
+    for name in ["Earlier", "Primary"]:
+        with chosen.run(title=name, project="中文 项目") as run:
+            run.add_artifact(source, profile={"x": "x"})
+        runs.append(run)
+    app = AppTest.from_file(Path(__file__).parents[1] / "src/research_data/app.py", default_timeout=30)
+    app.query_params.update(catalog=str(chosen.root), project_dir=str(project))
+    app.run()
+    assert not app.exception
+    assert app.session_state["catalog_root"] == str(chosen.root)
+    assert app.session_state["project_templates"].path == project / "research-data.project.json"
+    assert any("rd-card-grid" in item.value and "project_dir=" in item.value for item in app.markdown)
+    app.query_params["up"] = "中文 项目"
+    app.run()
+    assert app.session_state["up_filter"]["value"] == "中文 项目"
+    app.query_params.pop("up")
+    app.run()
+    assert "up_filter" not in app.session_state
+    app.session_state["compare_ids"] = [runs[0].run_id]
+    app.query_params["pick"] = runs[1].run_id
+    app.run()
+    detail = next(item.value for item in app.markdown if "<article class='rd-detail'>" in item.value)
+    assert "Primary" in detail and "Earlier" not in detail
+    next(item for item in app.text_input if item.label == "搜索标题 / 描述 / 标签").set_value("Primary").run()
+    assert "pick" not in app.query_params
+    assert any("搜索结果" in item.value for item in app.markdown)
+    assert not app.exception
+
+
 def test_streamlit_app_loads_catalog_and_renders_plot(tmp_path, monkeypatch):
     import sys
     monkeypatch.setattr(sys, "argv", ["streamlit"])
@@ -179,7 +232,27 @@ def test_project_dir_query_parameter_selects_template_project(tmp_path, monkeypa
 import sys
 from pathlib import Path
 
-APP = Path(r"D:\research-data\src\research_data\app.py")
+APP = Path(__file__).parents[1] / "src" / "research_data" / "app.py"
+
+
+def test_browse_counts_use_registered_files_and_preserve_stored_parameters(tmp_path):
+    from research_data.app import _browse_file_counts, _browse_order
+    from research_data.catalog import Catalog
+
+    cat = Catalog(tmp_path / "catalog")
+    source = tmp_path / "data.csv"
+    source.write_text("x,y\n0,1\n1,2\n", encoding="utf-8")
+    with cat.run(title="One file", parameters={"temperature": 2}) as one:
+        one.add_artifact(source)
+    with cat.run(title="Two files") as two:
+        two.add_artifact(source)
+        two.add_artifact(source, role="reference")
+    original = cat.list_runs_summary()
+    enriched = _browse_file_counts(cat, original)
+    assert _browse_order(enriched, "文件最多")[0]["run_id"] == two.run_id
+    assert {r["run_id"]: r["parameters"]["file_count"] for r in enriched} == {one.run_id: 1, two.run_id: 2}
+    assert all("file_count" not in r["parameters"] for r in original)
+    assert cat.get(one.run_id)["parameters"] == {"temperature": 2}
 
 
 def test_big_catalog_browse_basket_flow(tmp_path, monkeypatch):

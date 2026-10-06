@@ -7,6 +7,8 @@ from typing import Any
 from research_data.plotting import THEMES, export_plot, render_plot
 from research_data.social import Interactions
 from research_data.thumbnails import human_count
+from research_data.ui import (STYLES, browse_url, card_html, detail_html,
+                              header_html, hero_html, ranking_html, section_html)
 
 def _catalog(root: str):
     from research_data.catalog import Catalog
@@ -92,8 +94,6 @@ def _reset_on_run_change(st, identity):
             st.session_state.pop(key, None)
 
 def _run_card(st, run):
-    st.subheader(run.get("title", "Untitled"))
-    st.write(run.get("description") or "此运行尚未填写说明。")
     st.caption(f"Run: {run['run_id']} · 项目: {run.get('project')} · 样品: {run.get('sample') or '未声明'} · {run.get('kind')} / {run.get('execution_status')}")
     classifications = run.get("categories", {})
     st.caption("分类：" + (" · ".join(f"{k}={v}" for k, v in classifications.items()) if isinstance(classifications, dict) else str(classifications)))
@@ -185,28 +185,71 @@ def _data_artifact(run):
     artifacts = run.get("artifacts", []) or []
     return next((a for a in artifacts if a.get("role") not in {"log", "stdout", "stderr"} and a.get("format") not in {"log", "txt"}), artifacts[0] if artifacts else None)
 
+
+def _browse_file_counts(catalog, runs):
+    """Enrich display summaries from the index without changing stored parameters."""
+    if all((r.get("parameters") or {}).get("file_count") is not None for r in runs):
+        return runs
+    with catalog._connect() as connection:
+        counts = dict(connection.execute("SELECT run_id, COUNT(*) FROM artifacts GROUP BY run_id"))
+    return [{**r, "parameters": {**(r.get("parameters") or {}), "file_count": counts.get(r["run_id"], 0)}}
+            if (r.get("parameters") or {}).get("file_count") is None else r for r in runs]
+
+
+def _browse_order(runs, order):
+    """A deterministic project-balanced feed; scientific acquisition order is untouched."""
+    if order == "文件最多":
+        return sorted(runs, key=lambda r: ((r.get("parameters") or {}).get("file_count") or 0,
+                                          r.get("created_at") or ""), reverse=True)
+    ordered = sorted(runs, key=lambda r: r.get("created_at") or "", reverse=order != "最早优先")
+    if order != "推荐":
+        return ordered
+    from collections import deque
+    groups = {}
+    for run in ordered:
+        groups.setdefault(run.get("project") or "", deque()).append(run)
+    queues = deque(groups.values())
+    result = []
+    while queues:
+        queue = queues.popleft()
+        result.append(queue.popleft())
+        if queue:
+            queues.append(queue)
+    return result
+
+
+def _search_home(st):
+    for key in ("pick", "up", "fav"):
+        st.query_params.pop(key, None)
+    st.session_state.pop("card_pick", None)
+    st.session_state.pop("up_filter", None)
+
 def main(root: str | None = None) -> None:
     import streamlit as st
     st.set_page_config(page_title="研究数据浏览器", page_icon="📈", layout="wide")
     from research_data.agent import default_catalog
-    root = root or st.session_state.get("catalog_root") or default_catalog()
-    # ── Bilibili 式顶栏：品牌+首页 | 居中搜索 | 右侧功能入口；隐藏 Streamlit 装饰 ──
-    st.markdown("<style>#MainMenu, .stDeployButton, div[data-testid='stToolbar'], "
-                "div[data-testid='stDecoration'], footer {visibility:hidden !important; height:0 !important;}"
-                "header[data-testid='stHeader'] {display:none !important;}"
-                "section[data-testid='stSidebar'] {display:none !important;}</style>", unsafe_allow_html=True)
-    head_l, head_m, head_r = st.columns([1.1, 2.4, 1.1])
-    with head_l:
-        st.markdown("### <a href='/' style='text-decoration:none;color:#fb7299'>📺 研究数据</a>"
-                    "&nbsp;<a href='/' style='text-decoration:none;color:#61666d;font-size:14px'>首页</a>",
-                    unsafe_allow_html=True)
-    with head_m:
-        query = st.text_input("搜索标题 / 描述 / 标签", placeholder="搜索 run / 脚本 / 目录…")
-    with head_r:
-        st.markdown("<div style='padding-top:8px;text-align:right'>"
-                    "<a href='/?fav=1' style='text-decoration:none;font-size:15px'>⭐ 收藏</a>&nbsp;&nbsp;"
-                    "<span style='color:#61666d;font-size:15px'>⚙️ 设置 ↓</span></div>", unsafe_allow_html=True)
-    with st.expander("⚙️ 设置 / 使用帮助 / 首次导入", expanded=False):
+    params = dict(st.query_params)
+    query_catalog = params.get("catalog")
+    if query_catalog and st.session_state.get("_last_query_catalog") != query_catalog:
+        st.session_state["catalog_root"] = str(query_catalog)
+    st.session_state["_last_query_catalog"] = query_catalog
+    root = st.session_state.get("catalog_root") or root or default_catalog()
+    context = {"catalog": str(root), "project_dir": str(st.session_state.get("project_dir") or
+               params.get("project_dir") or os.environ.get("RESEARCH_DATA_PROJECT", str(Path.cwd())))}
+    home_url = browse_url(context)
+    st.markdown(STYLES, unsafe_allow_html=True)
+    with st.container(key="rd_header"):
+        head_l, head_m, head_r = st.columns([1.5, 2.2, .7], vertical_alignment="center")
+        with head_l:
+            st.markdown(header_html(home_url, browse_url(context, fav="1"),
+                                   "favorites" if params.get("fav") == "1" else "home"), unsafe_allow_html=True)
+        with head_m:
+            query = st.text_input("搜索标题 / 描述 / 标签", placeholder="搜索数据、项目、标签或源代码…",
+                                  label_visibility="collapsed", on_change=_search_home, args=(st,))
+        with head_r:
+            settings = st.popover("管理 / 导入", use_container_width=True)
+    with settings:
+        st.markdown("**资料库与项目设置**")
         st.text_input("Catalog 根目录", value=str(root), key="catalog_root")
         root = st.session_state.catalog_root
         query_project = st.query_params.get("project_dir") if hasattr(st, "query_params") else None
@@ -246,7 +289,7 @@ def main(root: str | None = None) -> None:
         for key in ("selected_identity", "datasets", "dataset_ids", "figure", "figure_recipe", "figure_inputs", "figure_source_snapshot", "figure_provenance", "figure_archive", "static_download", "loaded_recipe"):
             st.session_state.pop(key, None)
     try:
-        catalog = _catalog(root); runs = catalog.list_runs_summary()
+        catalog = _catalog(root); runs = _browse_file_counts(catalog, catalog.list_runs_summary())
     except Exception as exc:
         st.error(f"无法打开 catalog：{exc}"); return
     social = Interactions(root)
@@ -258,11 +301,15 @@ def main(root: str | None = None) -> None:
         if pick and re.fullmatch(r"[A-Za-z0-9_\-]+", pick):
             st.session_state["card_pick"] = pick
         up_param = st.query_params.get("up")
-        if up_param and re.fullmatch(r"[A-Za-z0-9_.\-]+", up_param):
+        if up_param != st.session_state.get("_last_query_up"):
+            st.session_state.pop("up_filter", None)
             generators = {str(r["categories"]["generator"]) for r in runs
                           if isinstance(r.get("categories"), dict) and r["categories"].get("generator")}
-            field = "generator" if up_param in generators else "project"
-            st.session_state["up_filter"] = {"field": field, "value": up_param}
+            projects = {r.get("project") for r in runs}
+            if up_param and (up_param in generators or up_param in projects):
+                field = "generator" if up_param in generators else "project"
+                st.session_state["up_filter"] = {"field": field, "value": up_param}
+        st.session_state["_last_query_up"] = up_param
 
     @st.cache_data(show_spinner=False, max_entries=600)
     def _cover_png(catalog_root: str, run_id: str, badge: str = "", fp_key: str = "", project: str = ""):
@@ -313,29 +360,33 @@ def main(root: str | None = None) -> None:
         except Exception:
             return None, "none"
 
-    with st.expander("首次导入 / Import profile", expanded=not bool(runs)):
-        st.caption("填写文件路径和 JSON mapping；配置会作为 artifact profile 保存。")
-        path = st.text_input("数据文件路径", key="import_path")
-        project_templates = st.session_state.get("project_templates")
-        profile_names = sorted((project_templates.config.get("profiles", {}) if project_templates else {}) or {})
-        profile_choice = st.selectbox("项目 profile", ["（无）", *profile_names], key="import_profile")
-        if profile_choice != "（无）" and st.button("应用 profile"):
-            try:
-                profile = project_templates.profile(profile_choice)
-                st.session_state["import_mapping"] = json.dumps(profile, ensure_ascii=False, indent=2)
-                st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
-                st.rerun()
-            except Exception as exc:
-                st.error(f"无法应用 profile：{exc}")
-        mapping_text = st.text_area("mapping JSON", value='{"x": "time"}', key="import_mapping")
-        title = st.text_input("实验标题", value="首次导入", key="import_title")
-        if st.button("导入并登记"):
-            try:
-                profile = json.loads(mapping_text)
-                run = catalog.start_run(title, kind="experiment", parameters={"profile": profile})
-                run.add_artifact(path, role="raw", profile=profile); run.finish(); st.success("已登记；刷新筛选即可查看。"); st.rerun()
-            except Exception as exc: st.error(f"导入失败：{exc}")
-    if not runs: st.info("Catalog 为空，请先使用上面的导入表单。"); return
+    with settings:
+        with st.expander("首次导入 / Import profile", expanded=not bool(runs)):
+            st.caption("填写文件路径和 JSON mapping；配置会作为 artifact profile 保存。")
+            path = st.text_input("数据文件路径", key="import_path")
+            project_templates = st.session_state.get("project_templates")
+            profile_names = sorted((project_templates.config.get("profiles", {}) if project_templates else {}) or {})
+            profile_choice = st.selectbox("项目 profile", ["（无）", *profile_names], key="import_profile")
+            if profile_choice != "（无）" and st.button("应用 profile"):
+                try:
+                    profile = project_templates.profile(profile_choice)
+                    st.session_state["import_mapping"] = json.dumps(profile, ensure_ascii=False, indent=2)
+                    st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"无法应用 profile：{exc}")
+            mapping_text = st.text_area("mapping JSON", value='{"x": "time"}', key="import_mapping")
+            title = st.text_input("实验标题", value="首次导入", key="import_title")
+            if st.button("导入并登记"):
+                try:
+                    profile = json.loads(mapping_text)
+                    run = catalog.start_run(title, kind="experiment", parameters={"profile": profile})
+                    run.add_artifact(path, role="raw", profile=profile); run.finish(); st.success("已登记；刷新筛选即可查看。"); st.rerun()
+                except Exception as exc: st.error(f"导入失败：{exc}")
+    if not runs:
+        st.markdown(hero_html(0, 0), unsafe_allow_html=True)
+        st.info("资料库还没有数据。点击右上角“管理 / 导入”添加数据，或用 research-data run 登记计算。")
+        return
     dedicated = next((r for r in runs if r["run_id"] == pick), None) \
         if pick and re.fullmatch(r"[A-Za-z0-9_\-]+", pick) else None
     if pick and dedicated is None:
@@ -344,8 +395,7 @@ def main(root: str | None = None) -> None:
     up_filter = st.session_state.get("up_filter")  # {"field": "generator"|"project", "value": str}
     if dedicated is not None:
         # ── 专属视频页（Bilibili BV 页）：整页只显示这组数据 ──
-        st.markdown("<a href='/' style='text-decoration:none;font-size:15px'>← 返回首页</a>",
-                    unsafe_allow_html=True)
+        st.markdown(f"<a class='rd-back' href='{home_url.replace('&', '&amp;')}' target='_self'>← 返回首页</a>", unsafe_allow_html=True)
         related6 = sorted((r for r in runs
                            if r.get("project") == dedicated.get("project") and r["run_id"] != dedicated["run_id"]),
                           key=lambda r: r.get("created_at") or "", reverse=True)[:6]
@@ -359,8 +409,9 @@ def main(root: str | None = None) -> None:
         picked, view, order = [], "卡片", "最新优先"
     else:
         # ── 排序小 tab（Bilibili 分区页样式）──
-        order = {"最新": "最新优先", "最早": "最早优先", "最多文件": "文件最多"}.get(
-            st.pills("排序", ["最新", "最早", "最多文件"], default="最新", label_visibility="collapsed"), "最新优先")
+        st.markdown(hero_html(len(runs), {r.get("project") for r in runs if r.get("project")}), unsafe_allow_html=True)
+        order = {"推荐": "推荐", "最新": "最新优先", "最早": "最早优先", "最多文件": "文件最多"}.get(
+            st.pills("排序", ["推荐", "最新", "最早", "最多文件"], default="推荐", label_visibility="collapsed"), "推荐")
         # ── 分区导航行：项目频道（Bilibili 频道栏），按 run 数取前 15 ──
         project_counts: dict[str, int] = {}
         for r in runs:
@@ -406,94 +457,48 @@ def main(root: str | None = None) -> None:
             base = [r for r in base if r["run_id"] in favs]
         filtered = [r for r in base
                     if (not needle or needle in json.dumps(r, ensure_ascii=False, default=str).casefold())]
-        reverse = order != "最早优先"
-        if order == "文件最多":
-            filtered.sort(key=lambda r: ((r.get("parameters") or {}).get("file_count") or 0, r.get("created_at") or ""), reverse=True)
-        else:
-            filtered.sort(key=lambda r: r.get("created_at") or "", reverse=reverse)
-        if not filtered: st.info("调整筛选条件即可浏览数据。"); return
+        filtered = _browse_order(filtered, order)
+        if not filtered:
+            st.info("没有找到匹配的数据，试试其他关键词或分区。")
+            return
 
-        picked = []
-        # ── Bilibili 式布局：左侧卡片墙，右侧排行榜/我的收藏 ──
-        wall_col, rank_col = st.columns([4, 1.05])
-        with wall_col:
-            PAGE = 12
-            num_pages = max(1, -(-len(filtered) // PAGE))
-            page = st.pagination(num_pages, key="cards_page", max_visible_pages=7)
-            page_runs = filtered[(page - 1) * PAGE: page * PAGE]
-            card_rows = [st.columns(4) for _ in range(-(-len(page_runs) // 4))]
-        for idx, r in enumerate(page_runs):
-            with card_rows[idx // 4][idx % 4]:
+        title = "我的收藏" if only_favorites else ("搜索结果" if query else (channel or "发现数据"))
+        subtitle = f"{len(filtered):,} 条运行" + (" · 按项目均衡展示" if order == "推荐" else "")
+        st.markdown(section_html(title, subtitle), unsafe_allow_html=True)
+        wall_col, rank_col = st.columns([4, 1.1])
+        with wall_col, st.container(key="rd_wall"):
+            page_size = 12
+            num_pages = max(1, -(-len(filtered) // page_size))
+            filter_key = (query, channel, only_favorites, str(up_filter), order, len(filtered))
+            if st.session_state.get("_feed_filter") != filter_key:
+                st.session_state["cards_page"] = 1
+                st.session_state["_feed_filter"] = filter_key
+            page = min(max(1, st.session_state.get("cards_page", 1)), num_pages)
+            page_runs = filtered[(page - 1) * page_size:page * page_size]
+            cards = []
+            for r in page_runs:
+                if (r.get("parameters") or {}).get("file_count") is None:
+                    r = {**r, "artifacts": catalog.get(r["run_id"]).get("artifacts", [])}
                 fc = (r.get("parameters") or {}).get("file_count")
-                badge = (f"{human_count(fc)}文件" if fc is not None else
-                         (f"{human_count((r.get('parameters') or {}).get('total_bytes', 0) / 1e6)}MB"
-                          if (r.get("parameters") or {}).get("total_bytes") else ""))
+                badge = f"{human_count(fc)} 个文件" if fc is not None else ""
                 png, mode = _cover_png(str(root), r["run_id"], badge,
-                                       fp_key=json.dumps(r.get("parameters") or {}, sort_keys=True, default=str),
-                                       project=str(r.get("project") or ""))
-                href = f"?pick={r['run_id']}" + (f"&up={quote(up_filter['value'], safe='')}" if up_filter else "")
-                title_html = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
-                if png:
-                    img = (f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}")
-                    st.markdown(f"<a href='{href}' style='text-decoration:none'>"
-                                f"<img src='{img}' style='width:100%;border-radius:8px;display:block' "
-                                f"title='{title_html}'/></a>", unsafe_allow_html=True)
-                else:
-                    fmt = str((r.get("kind") or "run"))[:6]
-                    chip = (f"<span style='background:#333;border-radius:4px;padding:1px 6px;font-size:12px;'>{badge or fmt}</span>"
-                            if badge else fmt)
-                    st.markdown(f"<a href='{href}' style='text-decoration:none'>"
-                                f"<div style='height:{int(180*0.56)}px;border-radius:8px;background:#17171f;"
-                                f"display:flex;align-items:center;justify-content:center;gap:8px;color:#666;"
-                                f"font-size:22px;'>📊 {chip}</div></a>", unsafe_allow_html=True)
-                if mode == "fingerprint":
-                    st.caption("¶ 参数指纹封面")
+                                      fp_key=json.dumps(r.get("parameters") or {}, sort_keys=True, default=str),
+                                      project=str(r.get("project") or ""))
                 cats = r.get("categories") if isinstance(r.get("categories"), dict) else {}
-                up = cats.get("generator") or cats.get("site") or r.get("project") or ""
-                stats = []
-                if fc is not None:
-                    stats.append(f"▶ {human_count(fc)}")
-                n_comments = social.state(r["run_id"])["comments"]
-                if n_comments:
-                    stats.append(f"💬 {n_comments}")
-                if social.state(r["run_id"])["liked"]:
-                    stats.append("👍")
-                meta = " · ".join([*stats, (r.get("created_at") or "")[:10]])
-                if social.is_favorite(r["run_id"]):
-                    meta = "⭐ " + meta
-                st.caption(meta)
-                st.markdown(f"<a href='{href}' style='color:inherit;font-weight:600;font-size:14px;"
-                            f"text-decoration:none'>{title_html[:44]}</a>", unsafe_allow_html=True)
-                up_value = str(cats.get("generator") or r.get("project") or "")
-                if up_value:
-                    up_html = up_value.replace("&", "&amp;").replace("<", "&lt;")[:26]
-                    st.markdown(f"<a href='?up={quote(up_value, safe= '')}' "
-                                f"style='color:#99a2aa;font-size:12px;text-decoration:none'>UP · {up_html}</a>",
-                                unsafe_allow_html=True)
-        with rank_col:
-            # ── 排行榜（Bilibili 右侧栏）：热播=文件最多 TOP10；下方我的收藏 ──
-            def _link(r, i):
-                mark = "🔥" if i <= 3 else f"{i}."
-                t = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
-                fc = (r.get("parameters") or {}).get("file_count")
-                return (f"<div style='margin-bottom:6px'><a href='?pick={r['run_id']}' "
-                        f"style='color:inherit;text-decoration:none;font-size:13px'>"
-                        f"{mark} {t[:20]}</a>"
-                        + (f"<div style='color:#99a2aa;font-size:11px'>▶ {human_count(fc)}</div>" if fc is not None else "")
-                        + "</div>")
-            st.markdown("**🔥 排行榜 · 热播（文件最多）**")
-            hot = sorted(filtered, key=lambda r: ((r.get("parameters") or {}).get("file_count") or 0,
-                                                  r.get("created_at") or ""), reverse=True)[:10]
-            st.markdown("".join(_link(r, i) for i, r in enumerate(hot, 1)), unsafe_allow_html=True)
-            fav_ids = [rid for rid in social.favorites()
-                       if any(r["run_id"] == rid for r in filtered)]
-            if fav_ids:
-                st.markdown("**⭐ 我的收藏**")
-                by_id = {r["run_id"]: r for r in filtered}
-                st.markdown("".join(_link(by_id[rid], i) for i, rid in enumerate(fav_ids[:10], 1)),
-                            unsafe_allow_html=True)
-            st.caption("点击条目直接进入")
-        return  # 首页到此为止;详情/播放器/绘图只在视频页(?pick=…)
+                up = str(cats.get("generator") or r.get("project") or "")
+                cards.append(card_html(r, png, browse_url(context, pick=r["run_id"]),
+                                       browse_url(context, up=up), social.state(r["run_id"]), badge, mode))
+            st.markdown("<div class='rd-card-grid'>" + "".join(cards) + "</div>", unsafe_allow_html=True)
+            st.pagination(num_pages, key="cards_page", max_visible_pages=7)
+        with rank_col, st.container(key="rd_sidebar"):
+            links = {r["run_id"]: browse_url(context, pick=r["run_id"]) for r in filtered}
+            hot = _browse_order(filtered, "文件最多")[:8]
+            st.markdown(ranking_html(hot, links), unsafe_allow_html=True)
+            fav_ids = set(social.favorites())
+            favorites = [r for r in filtered if r["run_id"] in fav_ids][:5]
+            if favorites:
+                st.markdown(ranking_html(favorites, links, "我的收藏", "已收藏的运行"), unsafe_allow_html=True)
+        return
     if not filtered: st.info("调整筛选条件即可浏览数据。"); return
     card_pick = st.session_state.get("card_pick")
     current = next((r for r in filtered if r["run_id"] == card_pick), None) or \
@@ -513,13 +518,15 @@ def main(root: str | None = None) -> None:
     chosen_summaries.sort(key=lambda r: r.get("created_at") or "")  # 输入按时间正序
     selected_runs = [catalog.get(r["run_id"]) for r in chosen_summaries]
     identity = tuple(r["run_id"] for r in selected_runs); _reset_on_run_change(st, identity)
-    run = selected_runs[0]
+    run = catalog.get(current["run_id"])
 
     # ── 视频页布局：左侧数据卡+互动+评论，右侧相关推荐（Bilibili 式）──
     page_l, page_r = st.columns([4, 1.3])
-    with page_l:
+    with page_l, st.container(key="rd_detail"):
+        st.markdown(detail_html(run), unsafe_allow_html=True)
         _player(st, catalog, run, str(root))
-        _run_card(st, run)
+        with st.expander("运行详情 / 来源与参数"):
+            _run_card(st, run)
         state = social.state(run["run_id"])
         act_a, act_b, act_c = st.columns([1, 1, 3])
         if act_a.button(("👍 已赞" if state["liked"] else "👍 点赞"), key=f"like_{run['run_id']}",
@@ -552,18 +559,12 @@ def main(root: str | None = None) -> None:
                 st.caption(f"🤖 {pending_n} 条评价请求待 agent 处理")
         except Exception:
             pass
-    with page_r:
+    with page_r, st.container(key="rd_related"):
         related_pool = [r for r in filtered if r.get("project") == run.get("project")
                         and r["run_id"] != run["run_id"]][:6]
         if related_pool:
-            st.markdown("**🔗 相关推荐**")
-            for r in related_pool:
-                rr_a, rr_b = st.columns([4, 1])
-                rr_a.caption((r.get("title") or r["run_id"])[:30] + "\n\n" +
-                             ((r.get("created_at") or "")[:10]))
-                if rr_b.button("▶", key=f"rel_{r['run_id']}", help="换这个"):
-                    st.session_state["card_pick"] = r["run_id"]; st.rerun()
-            st.caption("同项目 · 最新在前")
+            links = {r["run_id"]: browse_url(context, pick=r["run_id"]) for r in related_pool}
+            st.markdown(ranking_html(related_pool, links, "同项目数据", "最新登记的相关运行"), unsafe_allow_html=True)
     snapshot = (run.get("provenance") or {}).get("snapshot") or {}
     if snapshot.get("path"):
         archive = Path(root) / "runs" / run["run_id"] / snapshot["path"]
@@ -719,7 +720,7 @@ def main(root: str | None = None) -> None:
         try:
             from research_data.provenance import capture_provenance
             with tempfile.TemporaryDirectory() as td:
-                provenance = capture_provenance(Path(__file__).parent, td, entrypoint="app.py", source_paths=["app.py", "plotting.py", "project.py"])
+                provenance = capture_provenance(Path(__file__).parent, td, entrypoint="app.py", source_paths=["app.py", "plotting.py", "project.py", "ui.py"])
                 source_archive = (Path(td) / provenance["snapshot"]["path"]).read_bytes()
             source_snapshot = provenance["snapshot"]["files"]
             origin = _project_origin(recipe) or _project_origin(loaded)

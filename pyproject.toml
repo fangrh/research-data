@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "research-data"
-version = "0.2.0"
+version = "0.3.0"
 description = "Agent-first scientific data catalog, source provenance and reusable plotting"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -13,10 +13,10 @@ license-files = ["LICENSE"]
 dependencies = ["numpy>=1.24,<3", "pandas>=2,<4", "xarray>=2024.1", "plotly>=6,<7", "h5py>=3.10,<4", "scipy>=1.11,<2"]
 
 [project.optional-dependencies]
-ui = ["streamlit>=1.40,<2"]
+ui = ["streamlit>=1.65,<2"]
 formats = ["pyarrow>=16", "qcodes>=0.55,<1"]
 export = ["kaleido>=1,<2"]
-test = ["pytest>=8,<10", "build>=1", "streamlit>=1.40,<2", "pyarrow>=16", "qcodes>=0.55,<1", "kaleido>=1,<2"]
+test = ["pytest>=8,<10", "build>=1", "streamlit>=1.65,<2", "pyarrow>=16", "qcodes>=0.55,<1", "kaleido>=1,<2"]
 
 [project.scripts]
 research-data = "research_data.cli:main"

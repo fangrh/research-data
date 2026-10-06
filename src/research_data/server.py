@@ -95,7 +95,9 @@ def stop(root, timeout=15):
 def _command(root, port, script=None):
     command = [sys.executable, "-m", "streamlit", "run", str(script or Path(__file__).with_name("app.py")),
             "--server.address", "127.0.0.1", "--server.port", str(port), "--server.headless", "true",
-            "--browser.gatherUsageStats", "false", "--", _identity(root)]
+            "--browser.gatherUsageStats", "false", "--theme.base", "light",
+            "--theme.primaryColor", "#fb7299", "--theme.textColor", "#18191c",
+            "--", _identity(root)]
     if script:
         command[command.index("--"):command.index("--")] = ["--server.enableStaticServing", "true"]
     return command
