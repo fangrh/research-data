@@ -1,6 +1,7 @@
 """Chinese Streamlit browser; launch with ``streamlit run app.py -- ROOT``."""
 from __future__ import annotations
-import argparse, copy, hashlib, json, os, tempfile, zipfile
+import argparse, base64, copy, hashlib, json, os, re, tempfile, zipfile
+from urllib.parse import quote
 from pathlib import Path
 from typing import Any
 from research_data.plotting import THEMES, export_plot, render_plot
@@ -162,6 +163,17 @@ def main(root: str | None = None) -> None:
     except Exception as exc:
         st.error(f"无法打开 catalog：{exc}"); return
     social = Interactions(root)
+    # 封面直点：URL ?pick=<run_id> 选中运行；?up=<名> 进入 UP（脚本/项目）筛选
+    if hasattr(st, "query_params"):
+        pick = st.query_params.get("pick")
+        if pick and re.fullmatch(r"[A-Za-z0-9_\-]+", pick):
+            st.session_state["card_pick"] = pick
+        up_param = st.query_params.get("up")
+        if up_param and re.fullmatch(r"[A-Za-z0-9_.\-]+", up_param):
+            generators = {str(r["categories"]["generator"]) for r in runs
+                          if isinstance(r.get("categories"), dict) and r["categories"].get("generator")}
+            field = "generator" if up_param in generators else "project"
+            st.session_state["up_filter"] = {"field": field, "value": up_param}
 
     @st.cache_data(show_spinner=False, max_entries=600)
     def _cover_png(catalog_root: str, run_id: str, badge: str = ""):
@@ -246,10 +258,26 @@ def main(root: str | None = None) -> None:
     if len(project_counts) > 1:
         top_projects = sorted(project_counts, key=lambda p: -project_counts[p])[:15]
         channel = st.pills("分区", sorted(top_projects), default=None, label_visibility="collapsed", wrap=True)
+    # UP 主筛选（点击卡片上的 UP 行进入；chip 可移除）
+    up_filter = st.session_state.get("up_filter")  # {"field": "generator"|"project", "value": str}
+    if up_filter:
+        chip_a, _ = st.columns([1, 3])
+        if chip_a.button(f"UP · {up_filter['value']} ✕", key="up_filter_chip",
+                         type="primary", use_container_width=False):
+            st.session_state.pop("up_filter", None)
+            try:
+                del st.query_params["up"]
+            except Exception:
+                pass
+            st.rerun()
     base = [r for r in runs
             if all(r.get(k) == v for k, v in scalar.items())
             and _facet_ok(r)
-            and (not channel or r.get("project") == channel)]
+            and (not channel or r.get("project") == channel)
+            and (not up_filter or (
+                (up_filter["field"] == "generator" and isinstance(r.get("categories"), dict)
+                 and str(r["categories"].get("generator")) == up_filter["value"])
+                or (up_filter["field"] == "project" and r.get("project") == up_filter["value"])))]
     collections = sorted({str(r["categories"]["collection"]) for r in base
                           if isinstance(r.get("categories"), dict) and r.get("categories", {}).get("collection") is not None})
     if 1 < len(collections) <= 12:
@@ -286,15 +314,21 @@ def main(root: str | None = None) -> None:
                          (f"{human_count((r.get('parameters') or {}).get('total_bytes', 0) / 1e6)}MB"
                           if (r.get("parameters") or {}).get("total_bytes") else ""))
                 png = _cover_png(str(root), r["run_id"], badge)
+                href = f"?pick={r['run_id']}" + (f"&up={quote(up_filter['value'], safe='')}" if up_filter else "")
+                title_html = (r.get("title") or r["run_id"]).replace("&", "&amp;").replace("<", "&lt;")
                 if png:
-                    st.image(png, use_container_width=True)
+                    img = (f"data:image/png;base64,{base64.b64encode(png).decode('ascii')}")
+                    st.markdown(f"<a href='{href}' style='text-decoration:none'>"
+                                f"<img src='{img}' style='width:100%;border-radius:8px;display:block' "
+                                f"title='{title_html}'/></a>", unsafe_allow_html=True)
                 else:
-                    fmt = str((r.get("format") or r.get("kind") or "run"))[:6]
+                    fmt = str((r.get("kind") or "run"))[:6]
                     chip = (f"<span style='background:#333;border-radius:4px;padding:1px 6px;font-size:12px;'>{badge or fmt}</span>"
                             if badge else fmt)
-                    st.markdown(f"<div style='height:{int(180*0.56)}px;border-radius:8px;background:#17171f;"
+                    st.markdown(f"<a href='{href}' style='text-decoration:none'>"
+                                f"<div style='height:{int(180*0.56)}px;border-radius:8px;background:#17171f;"
                                 f"display:flex;align-items:center;justify-content:center;gap:8px;color:#666;"
-                                f"font-size:22px;'>📊 {chip}</div>", unsafe_allow_html=True)
+                                f"font-size:22px;'>📊 {chip}</div></a>", unsafe_allow_html=True)
                 cats = r.get("categories") if isinstance(r.get("categories"), dict) else {}
                 up = cats.get("generator") or cats.get("site") or r.get("project") or ""
                 stats = []
@@ -309,10 +343,14 @@ def main(root: str | None = None) -> None:
                 if social.is_favorite(r["run_id"]):
                     meta = "⭐ " + meta
                 st.caption(meta)
-                title = r.get("title") or r.get("run_id")
-                if st.button(title[:40], key=f"card_{r['run_id']}", use_container_width=True):
-                    st.session_state["card_pick"] = r["run_id"]; st.rerun()
-                st.caption(f"UP · {str(up)[:26]}")
+                st.markdown(f"<a href='{href}' style='color:inherit;font-weight:600;font-size:14px;"
+                            f"text-decoration:none'>{title_html[:44]}</a>", unsafe_allow_html=True)
+                up_value = str(cats.get("generator") or r.get("project") or "")
+                if up_value:
+                    up_html = up_value.replace("&", "&amp;").replace("<", "&lt;")[:26]
+                    st.markdown(f"<a href='?up={quote(up_value, safe= '')}' "
+                                f"style='color:#99a2aa;font-size:12px;text-decoration:none'>UP · {up_html}</a>",
+                                unsafe_allow_html=True)
     else:
         # 表格视图（点列头可排序，点行选中）
         def _row(r):
