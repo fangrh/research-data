@@ -34,6 +34,7 @@ ResearchData 借鉴 QCoDeS 的实验/run、参数、数据集与来源记录方�
 - 折线、散点、多数据比较、二维热图、复数分量、高维整数切片；9 种风格，可保存绘图 recipe，导出 HTML/PNG/SVG/PDF。
 - 分析图另建 run，保存输入 run/artifact ID、文件哈希、配方、软件版本与绘图源码。
 - 自动匹配的 Codex skill；agent 使用同一套 API/CLI，Julia 等程序只需将输出写入指定文件夹。
+- 数据详情页支持本地编辑与 journal-style 校样：内置 Three Interact 可添加矢量内容、组件和 3D 视口，冻结带输入哈希的 HTML/PDF/场景 revision，并在图注或稳定元素 ID 上添加评论。详见 [编辑与校样](docs/PROOFS.md)。
 
 ## 安装并打开
 
@@ -52,7 +53,7 @@ Windows 也可运行 `./scripts/setup.ps1 -Agent -Catalog D:/research-data-libra
 
 普通包安装：`python -m pip install "research-data[ui,formats,export] @ git+https://github.com/fangrh/research-data.git"`。
 
-`ui` 安装网页界面，`formats` 安装 Parquet/QCoDeS，`export` 安装静态图导出。PNG/SVG/PDF 还需要 Chrome/Chromium；缺少时显示具体错误，HTML 可直接使用。HTML 使用 Plotly CDN，离线查看可用 Plotly 本地 bundle。
+`ui` 安装网页界面和校样 PDF（ReportLab），`formats` 安装 Parquet/QCoDeS，`export` 安装 CLI 静态图导出。普通 CLI 静态 PNG/SVG/PDF 仍按 Kaleido 配置浏览器；缺少时显示具体错误。校样编辑器使用浏览器内置的 Plotly 导入和打包的 Three Interact，不需要额外的 Chrome、VS Code 或 Node 服务。
 
 已有 Chromium 时用 `research-data configure --browser PATH/TO/chrome.exe` 指定；也可用 `python -c "import kaleido; kaleido.get_chrome_sync()"` 安装 Kaleido 的 Chrome。配置保存在用户目录，不写入软件仓库。
 

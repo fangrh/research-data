@@ -113,6 +113,19 @@ def parser():
     review.add_argument("--reply-file", help="Read the evaluation reply from a file")
     review.add_argument("--validation", choices=["not_checked", "partial", "passed", "failed"], help="Optional validation status to record with the review")
     review.add_argument("--validation-notes", default="", help="Notes stored with the validation update")
+    proof = command("proof", "Edit local figure drafts, publish immutable journal proofs and review anchored comments")
+    proof.add_argument("operation", choices=["show", "save", "list", "publish", "comments", "comment", "check"], nargs="?", default="list")
+    proof.add_argument("--run-id", required=True, help="Source run shown in the data browser")
+    proof.add_argument("--revision", help="Exact immutable proof revision (required for comments/check)")
+    proof.add_argument("--draft", help="Full proof-draft JSON file for save or publish; scene data never executes")
+    proof.add_argument("--expected-hash", help="Optimistic draft SHA-256 from proof show, required to avoid overwriting concurrent edits")
+    proof.add_argument("--figure", help="PNG export corresponding to the edited scene; required when the draft has no current image")
+    proof.add_argument("--text", default="", help="Comment text")
+    proof.add_argument("--text-file", help="Read comment text from UTF-8 file")
+    proof.add_argument("--anchor", default="figure", help="document/title/abstract/body/caption/figure or element:UUID")
+    proof.add_argument("--author", default="本地用户", help="Local comment author")
+    proof.add_argument("--reply-to", help="Comment id in the same revision")
+    proof.add_argument("--output", help="Write JSON result to this file (useful when inspecting/editing full drafts)")
     search = command("search", "Search descriptions, metadata and structured classifications")
     search.add_argument("query", nargs="?", default="")
     search.add_argument("--filter", action="append", default=[])
@@ -262,6 +275,37 @@ def main(argv=None):
             else:
                 result = command_catalog(command_parser, topic) if machine else render_help(command_parser, topic)
             _emit(result) if machine else print(result)
+            return 0
+        if args.action == "proof":
+            from .proofs import ProofStore
+            store = ProofStore(args.root)
+            if args.operation == "show":
+                result = store.get(args.run_id, args.revision) if args.revision else store.draft(args.run_id)
+            elif args.operation == "save":
+                if not args.draft:
+                    raise ValueError("proof save requires --draft")
+                result = store.save_draft(args.run_id, _json(args.draft), expected_hash=args.expected_hash)
+            elif args.operation == "list":
+                result = store.revisions(args.run_id)
+            elif args.operation == "publish":
+                image = Path(args.figure).read_bytes() if args.figure else None
+                result = store.publish(args.run_id, _json(args.draft) if args.draft else None, figure_png=image)
+            else:
+                if not args.revision:
+                    raise ValueError(f"proof {args.operation} requires --revision")
+                if args.operation == "comments":
+                    result = store.comments(args.run_id, args.revision)
+                elif args.operation == "comment":
+                    text = Path(args.text_file).read_text(encoding="utf-8-sig") if args.text_file else args.text
+                    result = store.add_comment(args.run_id, args.revision, text, anchor=args.anchor, author=args.author, parent_id=args.reply_to)
+                else:
+                    result = store.get(args.run_id, args.revision)
+                    result = {"ok": True, "revision_id": result["revision_id"], "analysis_run_id": result["analysis_run_id"], "files": result["files"]}
+            if args.output:
+                Path(args.output).write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+                _emit({"output": str(Path(args.output).resolve())})
+            else:
+                _emit(result)
             return 0
         if args.action in ("open", "status", "stop", "serve", "browse"):
             from . import server

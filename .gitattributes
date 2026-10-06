@@ -1,0 +1,5 @@
+# Vendored receipts verify exact bytes on Windows and Linux.
+src/research_data/resources/three_interact/* -text whitespace=cr-at-eol
+src/research_data/resources/three_interact/editor.js -whitespace
+src/research_data/resources/three_interact/plotly.min.js -whitespace
+*.pdf binary

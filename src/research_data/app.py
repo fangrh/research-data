@@ -625,10 +625,23 @@ def main(root: str | None = None) -> None:
     run = catalog.get(current["run_id"])
 
     # ── 视频页布局：左侧数据卡+互动+评论，右侧相关推荐（Bilibili 式）──
-    page_l, page_r = st.columns([4, 1.3])
+    workspace_key = f"workspace_{run['run_id']}"
+    proof_mode = st.session_state.get(workspace_key, "编辑与校样" if st.query_params.get("view") == "proof" else "数据与绘图") == "编辑与校样"
+    page_l, page_r = (st.container(), None) if proof_mode else st.columns([4, 1.3])
     with page_l, st.container(key="rd_detail"):
         st.markdown(detail_html(run), unsafe_allow_html=True)
-        _dataset_browser(st, catalog, run, selected_runs)
+        workspace = st.segmented_control("工作区", ["数据与绘图", "编辑与校样"], default="编辑与校样" if st.query_params.get("view") == "proof" else "数据与绘图", key=workspace_key)
+        if workspace == "编辑与校样":
+            st.query_params["view"] = "proof"
+        elif "view" in st.query_params:
+            del st.query_params["view"]
+        if (workspace == "编辑与校样") != proof_mode:
+            st.rerun()
+        if workspace == "编辑与校样":
+            from research_data.proof_ui import render as render_proof_ui
+            render_proof_ui(st, catalog, run)
+        else:
+            _dataset_browser(st, catalog, run, selected_runs)
         with st.expander("运行详情 / 来源与参数"):
             _run_card(st, run)
         state = social.state(run["run_id"])
@@ -663,6 +676,8 @@ def main(root: str | None = None) -> None:
                 st.caption(f"🤖 {pending_n} 条评价请求待 agent 处理")
         except Exception:
             pass
+    if workspace == "编辑与校样":
+        return
     with page_r, st.container(key="rd_related"):
         if st.button("加入对比", use_container_width=True) and current["run_id"] not in compare_ids and len(compare_ids) < 6:
             compare_ids.append(current["run_id"]); st.session_state["compare_ids"] = compare_ids; st.rerun()

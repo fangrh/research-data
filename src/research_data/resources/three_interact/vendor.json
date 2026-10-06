@@ -1,0 +1,20 @@
+{
+  "schema": "research-data.three-interact-vendor.v1",
+  "repository": "https://github.com/fangrh/three-interact",
+  "version": "0.10.0",
+  "commit": "d5a32605d5867bf8ecb1811651d66ae848c95d9a",
+  "dirty": false,
+  "plotly_python_version": "6.7.0",
+  "build_command": "node scripts/vendor-three-interact.mjs ../three-interact",
+  "files": {
+    "host.ts": "bdf68e8af846eccc6edf384d16bded37341377c25da7e6493ba947a6e365da58",
+    "host.js": "edcc7c2b3e021b94cbf8bb15b29a5efdd81f076ae692aa04363afa42403d2516",
+    "editor.js": "90a2ba7a89304287f19b78041b6850ba6548c2f0bad01b404677e3e54bc8fe71",
+    "style.css": "31b99162c714d134cf4ee9d6d084878d5f24245f4ac389d7254a69ec94245ba1",
+    "index.html": "0151fede8f53bfc514eab829d88c0f910dc25b0629c5815f01c7aa7b3b6ca2bd",
+    "plotly.min.js": "7c76cd2cff869485cdf9e7db41e73bf1491e994cf7349a7b5267c6c42d6d371b",
+    "THREE_INTERACT_LICENSE": "0e86edbf9ca7e6d74b878745f13d938944870b01ebf10c541323e34ca450ab79",
+    "THIRD_PARTY_NOTICES.md": "cdc3f44b6e7596b7ba613bfa8b940c03557d9e22137bacdb512f4931feaf5cb9",
+    "PLOTLY_LICENSE": "8c45d9eaf50c2f72dd9c7ab9ef440788ba58a3538484b5c51c1f17d5128752e7"
+  }
+}

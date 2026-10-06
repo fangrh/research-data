@@ -21,6 +21,7 @@ _INTENT = {
     "import": "Register historical data while keeping unknown provenance explicit.",
     "finish": "Record execution outcome separately from scientific validation.",
     "review": "Agent review dispatch: list/show pending user-review requests and complete them.",
+    "proof": "Compose editable Three Interact figures, freeze journal proofs, and review exact revisions.",
     "search": "Find runs by text, tags, classifications, or parameter filters.",
     "show": "Read one complete run and its artifact/data card.",
     "check": "Verify managed bytes and captured source integrity.",
@@ -65,6 +66,7 @@ _EXAMPLES = {
     "help": "research-data help run --json",
     "guide": "research-data guide generate",
     "run": "research-data run --title TITLE --repo SOURCE_ROOT --source SCRIPT -- python SCRIPT",
+    "proof": "research-data proof list --run-id RUN_ID",
     "import": "research-data import DATA_FILE --title TITLE --project PROJECT --profile PROFILE_JSON",
     "plot": "research-data plot RUN_ID --recipe recipe.json --output figure.html",
     "browse": "research-data browse",
@@ -78,13 +80,20 @@ _GROUPS = {
     "startup": ["open", "status", "stop", "serve", "browse"],
     "data": ["init", "start", "run", "register", "import", "finish", "validation"],
     "search": ["search", "show", "check", "rebuild"],
-    "review": ["review"],
+    "review": ["review", "proof"],
     "plot": ["plot", "profile", "themes", "project"],
     "maintenance": ["doctor", "configure", "demo", "install-agent"],
     "agent": ["help", "guide", "install-agent"],
 }
 
 _WORKFLOWS = {
+    "proof": {
+        "purpose": "Compose figures in Three Interact, publish versioned journal-style proofs and review exact revisions.",
+        "steps": ["open", "proof", "check"],
+        "decision": "Open a run, choose 编辑与校样, create a draft from the current plot, edit or add elements, then save a new proof. Agents use proof show --output draft.json, save with --expected-hash, and publish with a matching PNG export.",
+        "example": "research-data proof list --run-id RUN_ID",
+        "notes": ["The editor, component library and host are bundled; no separate Three Interact server is needed.", "Source plot pixels are a panel; add vector labels, shapes, images and 3D viewports without altering scientific values.", "PDF/HTML, editable JSON/assets, input artifact hashes, generating source and editor identity are frozen per revision.", "Comment on an exact --revision and --anchor figure/caption/element:UUID. Replies stay in that revision.", "Review comments and editorial changes do not update scientific validation.", "Existing figure drafts and proofs are local; opening the browser does not publish or send them to an agent."],
+    },
     "generate": {
         "purpose": "Generate new data with source provenance and managed outputs.",
         "steps": ["doctor", "init", "run", "check", "validation"],

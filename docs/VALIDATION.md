@@ -1,3 +1,26 @@
+# 0.5.0 编辑、校样与版本评论验证
+
+2026-10-06，Windows / Python 3.13.12 / Streamlit 1.65.0；使用标明的合成数据。
+
+| 验证 | 结果 |
+|---|---|
+| 回归与最终复核 | 完整回归 99 passed，245.18 s；最终修改涉及的 UI、校样、CLI 与包资源 23 passed，165.51 s；既有 NetCDF/NumPy ABI warning 保留 |
+| 实际编辑器 | 浏览器导入注册的数据图；添加文字，编辑名称、位置、字号、颜色、字重；自动保存和重开保留稳定 UUID |
+| 场景顺序 | 重开保留绘制顺序；“置于顶层”修复底图遮挡；原校样保持不变 |
+| 版本与评论 | 两个独立 revision；输入哈希一致、图形哈希不同；第一版 1 条元素评论，第二版独立图注评论和回复；UI/CLI 均可读取 |
+| 校样导出 | 实际生成 HTML/PDF/PNG；Poppler 渲染并检查 A4 双栏 PDF，面板标签、图注、正文双栏和来源页脚均可见；HTML 在界面内直接阅读 |
+| 可追溯性 | 在导出前保存产生源码；冻结场景、资源、编辑历史、绘图 recipe、输入 SHA-256 与上游编辑器版本；篡改检查和整体目录迁移通过 |
+| 独立安装 | 从独立 site-packages 加载 wheel；中文 PDF、评论、JSON 帮助和服务启动/复用/停止通过；最终分发资产以 vendor 哈希校验 |
+| 运行依赖 | 内置 Three Interact、Plotly 和许可证；校样流程不启动额外 Node、VS Code、编辑器服务或 headless Chrome |
+
+底图仍是图像面板，叠加文字和组件可编辑；原始曲线值通过数据/绘图工作区处理。单栏和双栏是通用校样版式，评论保存在本地。合成示例验证软件行为。
+
+![实际编辑器](proof-editor.png)
+
+![校样版本评论](proof-review.png)
+
+可查看 [合成 PDF 校样](proof-example.pdf)、[HTML](proof-example.html) 和 [使用指南](PROOFS.md)。最终 Windows/Linux CI 状态见对应 GitHub Actions。
+
 # 0.4.0 文件列表与变量查看验证
 
 2026-10-06，Windows / Python 3.13.12 / Streamlit 1.65.0。

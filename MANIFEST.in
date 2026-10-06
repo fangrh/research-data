@@ -1,6 +1,6 @@
-include LICENSE README.md INTERFACES.md Start-ResearchData.ps1 Start-ResearchData.cmd research-data.cmd
+include .gitattributes LICENSE README.md INTERFACES.md Start-ResearchData.ps1 Start-ResearchData.cmd research-data.cmd
 recursive-include examples *.py *.jl *.json
-recursive-include scripts *.ps1
-recursive-include docs *.md *.png
+recursive-include scripts *.ps1 *.mjs
+recursive-include docs *.md *.png *.pdf *.html
 global-exclude *.pyc
 prune src/research_data/resources/skill/scripts/__pycache__
