@@ -35,6 +35,36 @@ def _inside(base: Path, rel: str) -> Path:
     if not p.is_relative_to(base.resolve()): raise ValueError("artifact path escapes run directory")
     return p
 
+def _load_run_summaries(db_path: str):
+    """Read run summaries from the SQLite index without touching manifests.
+
+    Uses the optional Rust accelerator when importable; the pure-Python
+    path below is the reference implementation.
+    """
+    try:
+        from research_data_rspeed import load_run_summaries  # optional native build
+        return [dict(r) for r in load_run_summaries(db_path)]
+    except ImportError:
+        pass
+    with sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro", uri=True) as c:
+        c.row_factory = sqlite3.Row
+        rows = c.execute(
+            "SELECT run_id, title, project, sample, kind, execution_status,"
+            " created_at, updated_at, tags, categories, parameters, description FROM runs"
+        ).fetchall()
+    defaults = {"tags": [], "categories": {}, "parameters": {}}
+    out = []
+    for row in rows:
+        d = dict(row)
+        for key, fallback in defaults.items():
+            try:
+                d[key] = json.loads(d.get(key) or json.dumps(fallback))
+            except ValueError:
+                d[key] = fallback
+        out.append(d)
+    return out
+
+
 def _nested(obj: dict, key: str):
     cur = obj
     for part in key.split("."):
@@ -234,6 +264,43 @@ class Catalog:
             elif k == "tag": rows=[m for m in rows if v in m.get("tags", [])]
             elif rows and isinstance(rows[0].get(k), list): rows=[m for m in rows if v in m.get(k, [])]
         return sorted(rows, key=lambda x:x["created_at"])
+    def list_runs_summary(self, query="", filters=None):
+        """Index-only run summaries: no manifest files are read.
+
+        Returns dicts with run_id, title, project, sample, kind,
+        execution_status, created_at, updated_at, tags, categories,
+        parameters and description. Supports the scalar, tag, category.*
+        and parameter.* filters plus FTS/case-insensitive text query;
+        provenance filters require list_runs() and raise ValueError here.
+        """
+        summary = _load_run_summaries(str(self.db))
+        for key in (filters or {}):
+            if key in {"project", "sample", "kind", "execution_status", "tag"} or (
+                key.startswith(("category.", "parameter."))
+                and (not key.startswith("parameter.") or key.rsplit(".", 1)[1] in {"eq", "gte", "lte"})
+            ):
+                continue
+            raise ValueError(f"unsupported summary filter: {key}")
+        rows = summary
+        for k, v in (filters or {}).items():
+            if k in {"project", "sample", "kind", "execution_status"}:
+                rows = [r for r in rows if r.get(k) == v]
+            elif k == "tag":
+                rows = [r for r in rows if v in r.get("tags", [])]
+            elif k.startswith("category."):
+                field = k[9:]
+                rows = [r for r in rows if _nested(r.get("categories", {}), field) == v]
+            elif k.startswith("parameter."):
+                field, op = k[10:].rsplit(".", 1)
+                def match(r, field=field, op=op, v=v):
+                    value = _nested(r.get("parameters", {}), field)
+                    if value is None: return False
+                    return (op == "gte" and value >= v) or (op == "lte" and value <= v) or (op == "eq" and value == v)
+                rows = [r for r in rows if match(r)]
+        if query:
+            needle = query.casefold()
+            rows = [r for r in rows if needle in json.dumps(r, ensure_ascii=False, default=str).casefold()]
+        return sorted(rows, key=lambda x: x.get("created_at") or "")
     def rebuild_index(self):
         with self._connect() as c: c.execute("DELETE FROM runs"); c.execute("DELETE FROM runs_fts"); c.execute("DELETE FROM artifacts")
         for p in (self.root / "runs").glob("*/manifest.json"): self._index(json.loads(p.read_text(encoding="utf-8")))

@@ -12,3 +12,5 @@ recipes/
 demo-catalog-*/
 .artifacts/
 .wheel-venv/
+research-data.project.json
+rust/rspeed/target/

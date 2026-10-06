@@ -156,7 +156,7 @@ def main(root: str | None = None) -> None:
         for key in ("selected_identity", "datasets", "dataset_ids", "figure", "figure_recipe", "figure_inputs", "figure_source_snapshot", "figure_provenance", "figure_archive", "static_download", "loaded_recipe"):
             st.session_state.pop(key, None)
     try:
-        catalog = _catalog(root); runs = catalog.list_runs()
+        catalog = _catalog(root); runs = catalog.list_runs_summary()
     except Exception as exc:
         st.error(f"无法打开 catalog：{exc}"); return
     with st.expander("首次导入 / Import profile", expanded=not bool(runs)):
@@ -186,17 +186,72 @@ def main(root: str | None = None) -> None:
         def choices(field): return ["全部", *sorted({str(r.get(field)) for r in runs if r.get(field) not in (None, "")})]
         project, sample = st.selectbox("项目", choices("project")), st.selectbox("样品", choices("sample"))
         kind, status = st.selectbox("类型", choices("kind")), st.selectbox("状态", choices("execution_status"))
-        category, query = st.selectbox("类别", _categories(runs)), st.text_input("搜索标题 / 描述 / 标签")
-    filters = {k: v for k, v in {"project": project, "sample": sample, "kind": kind, "execution_status": status}.items() if v != "全部"}
-    try: filtered = catalog.list_runs(query=query, filters=filters)
-    except TypeError: filtered = catalog.list_runs(query=query)
-    filtered = [r for r in filtered if _category_match(r, category)]
+        # 按分类键逐个筛选（视频网站式 facet），最多 8 个键
+        cat_keys: dict[str, set] = {}
+        for r in runs:
+            c = r.get("categories")
+            if isinstance(c, dict):
+                for k, v in c.items():
+                    cat_keys.setdefault(k, set()).add(str(v))
+        facet_keys = sorted(cat_keys, key=lambda k: -len(cat_keys[k]))[:8]
+        facet_values = {}
+        for key in facet_keys:
+            facet_values[key] = st.selectbox(f"分类 · {key}", ["全部", *sorted(cat_keys[key])], key=f"facet_{key}")
+        query = st.text_input("搜索标题 / 描述 / 标签")
+    scalar = {k: v for k, v in {"project": project, "sample": sample, "kind": kind, "execution_status": status}.items() if v != "全部"}
+    def _facet_ok(r):
+        for key, chosen in facet_values.items():
+            if chosen == "全部": continue
+            c = r.get("categories")
+            if not (isinstance(c, dict) and str(c.get(key)) == chosen): return False
+        return True
+    needle = query.casefold()
+    filtered = [r for r in runs
+                if all(r.get(k) == v for k, v in scalar.items())
+                and _facet_ok(r)
+                and (not needle or needle in json.dumps(r, ensure_ascii=False, default=str).casefold())]
+    filtered.sort(key=lambda r: r.get("created_at") or "", reverse=True)
     st.write(f"找到 **{len(filtered)}** 个数据运行")
     if not filtered: st.info("调整筛选条件即可浏览数据。"); return
-    options = {f"{r.get('title', r.get('run_id'))} · {r.get('run_id')}": r for r in filtered}
-    selected = st.multiselect("选择运行（可多选比较）", list(options), default=list(options)[:1])
-    if not selected: st.info("请选择至少一个运行。"); return
-    selected_runs = [options[x] for x in selected]; identity = tuple(r["run_id"] for r in selected_runs); _reset_on_run_change(st, identity)
+
+    # 总列表：直接浏览全部运行（点击行选中；默认选最新一条）
+    def _row(r):
+        row = {"时间": (r.get("created_at") or "")[:19].replace("T", " "), "项目": r.get("project") or "",
+               "标题": r.get("title") or r.get("run_id"), "类型": r.get("kind") or "",
+               "状态": r.get("execution_status") or "",
+               "标签": " · ".join(r.get("tags") or [])}
+        file_count = (r.get("parameters") or {}).get("file_count")
+        if file_count is not None: row["文件数"] = file_count
+        return row
+    table_rows = [_row(r) for r in filtered]
+    try:
+        table = st.dataframe(table_rows, selection_mode="single-row", on_select="rerun",
+                             key="runs_table", hide_index=True, use_container_width=True, height=420)
+        picked = list(getattr(getattr(table, "selection", None), "rows", []) or [])
+    except TypeError:
+        picked = []
+    if len(filtered) <= 300:
+        options = {f"{r.get('title', r.get('run_id'))} · {r.get('run_id')}": r for r in filtered}
+        selected = st.multiselect("选择运行（可多选比较）", list(options), default=list(options)[:1])
+        if not selected: st.info("请选择至少一个运行。"); return
+        chosen_summaries = [options[x] for x in selected]
+    else:
+        current = filtered[picked[0]] if picked else filtered[0]
+        compare_ids = list(st.session_state.get("compare_ids") or [])
+        col_cur, col_add = st.columns([5, 1])
+        col_cur.caption(f"当前运行：{current.get('title')} · {current.get('run_id')}")
+        if col_add.button("加入对比") and current["run_id"] not in compare_ids and len(compare_ids) < 6:
+            compare_ids.append(current["run_id"]); st.session_state["compare_ids"] = compare_ids; st.rerun()
+        if compare_ids:
+            chips = st.columns(min(len(compare_ids) + 1, 7))
+            for i, rid in enumerate(compare_ids):
+                title = next((r.get("title", rid) for r in filtered if r["run_id"] == rid), rid)
+                if chips[min(i, 6)].button(f"✕ {str(title)[:24]}", key=f"drop_{rid[:16]}"):
+                    st.session_state["compare_ids"] = [x for x in compare_ids if x != rid]; st.rerun()
+        chosen_summaries = [current] + [r for r in filtered if r["run_id"] in set(compare_ids) and r["run_id"] != current["run_id"]]
+    chosen_summaries.sort(key=lambda r: r.get("created_at") or "")  # 输入按时间正序
+    selected_runs = [catalog.get(r["run_id"]) for r in chosen_summaries]
+    identity = tuple(r["run_id"] for r in selected_runs); _reset_on_run_change(st, identity)
     run = selected_runs[0]; _run_card(st, run)
     snapshot = (run.get("provenance") or {}).get("snapshot") or {}
     if snapshot.get("path"):

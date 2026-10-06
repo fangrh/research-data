@@ -29,6 +29,7 @@ Methods:
 - `start_run(title, project='default', kind='simulation', sample=None, description='', parameters=None, tags=None, categories=None, repo=None, entrypoint=None, command=None, source_paths=None, parent_run_ids=None, task_id=None) -> Run`.
 - `run(**kwargs) -> Run` context manager, captures provenance before data generation; exceptions persist failed execution and re-raise.
 - `get(run_id) -> dict`, `list_runs(query='', filters=None) -> list[dict]`, `rebuild_index() -> int`, `check(run_id=None) -> dict`.
+- `list_runs_summary(query='', filters=None) -> list[dict]` reads the SQLite index only (run_id/title/project/sample/kind/execution_status/created_at/updated_at/tags/categories/parameters/description); supports project/sample/kind/execution_status/tag/category.*/parameter.* filters plus case-insensitive query, raises ValueError for provenance filters. The browser list view uses this path. `rust/rspeed` is an optional native accelerator (`research_data_rspeed.load_run_summaries`, PyO3+rusqlite, built with maturin); when importable the loader dispatches to it, otherwise the pure-Python reference runs.
 - `register_artifact(run_id, path, role='raw', description='', variables=None, profile=None, copy=True, metadata=None) -> dict`.
 - `finish_run(run_id, status='completed', error=None) -> dict`; `set_validation(run_id, status, evidence=None, notes='') -> dict`.
 - `load_dataset(run_id, artifact_id=None, profile=None) -> xarray.Dataset`.

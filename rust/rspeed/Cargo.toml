@@ -1,0 +1,19 @@
+[package]
+name = "research_data_rspeed"
+version = "0.1.0"
+edition = "2021"
+description = "Native accelerator for research-data run summaries (SQLite index scan + JSON decode)"
+license = "MIT"
+
+[lib]
+name = "research_data_rspeed"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1

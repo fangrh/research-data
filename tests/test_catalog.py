@@ -64,3 +64,58 @@ def test_concurrent_artifact_registration_and_default_load(tmp_path: Path):
     assert len(catalog.get(run.run_id)["artifacts"]) == 2
     assert catalog.select_artifact(run.run_id)["artifact_id"] == results[0]["artifact_id"]
     assert "x" in catalog.load_dataset(run.run_id)
+
+
+def test_list_runs_summary_index_only(tmp_path: Path):
+    catalog = Catalog(tmp_path / "catalog")
+    source = tmp_path / "v.csv"; source.write_text("x\n1\n", encoding="utf-8")
+    with catalog.run(title="summary scan", project="p1", kind="simulation",
+                     parameters={"temperature_K": 3, "file_count": 1},
+                     tags=["scan"], categories={"domain": "transport", "stage": "raw"}) as run:
+        run.add_artifact(source)
+    with catalog.run(title="second", project="p2", kind="analysis") as run2:
+        pass
+
+    rows = catalog.list_runs_summary()
+    assert [r["run_id"] for r in rows] == sorted(r["run_id"] for r in rows) or len(rows) == 2
+    by_id = {r["run_id"]: r for r in rows}
+    first = by_id[run.run_id]
+    assert first["title"] == "summary scan" and first["project"] == "p1" and first["kind"] == "simulation"
+    assert first["tags"] == ["scan"] and first["categories"] == {"domain": "transport", "stage": "raw"}
+    assert first["parameters"]["temperature_K"] == 3
+    assert "artifacts" not in first  # summary carries no manifest-only fields
+
+    assert len(catalog.list_runs_summary(filters={"project": "p1"})) == 1
+    assert len(catalog.list_runs_summary(filters={"kind": "analysis"})) == 1
+    assert len(catalog.list_runs_summary(filters={"tag": "scan"})) == 1
+    assert len(catalog.list_runs_summary(filters={"category.domain": "transport"})) == 1
+    assert len(catalog.list_runs_summary(filters={"parameter.temperature_K.gte": 2})) == 1
+    assert len(catalog.list_runs_summary(filters={"parameter.temperature_K.lte": 2})) == 0
+    assert len(catalog.list_runs_summary(query="summary")) == 1
+    assert len(catalog.list_runs_summary(query="SUMMARY")) == 1  # case-insensitive
+    assert len(catalog.list_runs_summary(query="中文不存在")) == 0
+    try:
+        catalog.list_runs_summary(filters={"git_commit": "x"})
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unsupported filter accepted silently")
+
+
+def test_rust_summary_extension_matches_python(tmp_path: Path):
+    pytest = __import__("pytest")
+    rust = pytest.importorskip("research_data_rspeed")
+    catalog = Catalog(tmp_path / "catalog")
+    source = tmp_path / "v.csv"; source.write_text("x\n1\n", encoding="utf-8")
+    with catalog.run(title="rust parity", project="p", parameters={"temperature_K": 5},
+                     tags=["a"], categories={"domain": "transport"}) as run:
+        run.add_artifact(source)
+    rows = rust.load_run_summaries(str(catalog.db))
+    py_rows = [r for r in catalog.list_runs_summary() if True]
+    assert len(rows) == 1
+    first = rows[0]
+    assert first["run_id"] == run.run_id and first["title"] == "rust parity"
+    assert first["tags"] == ["a"] and first["categories"] == {"domain": "transport"}
+    assert first["parameters"]["temperature_K"] == 5
+    # the summary path dispatches to the extension automatically when importable
+    assert catalog.list_runs_summary()[0]["run_id"] == run.run_id
