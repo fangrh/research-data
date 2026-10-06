@@ -299,6 +299,15 @@ STYLES = """<style>
 .rd-section-heading { align-items:baseline; display:flex; gap:14px; margin:14px 0 12px; }
 .stApp .rd-section-heading h2,.stApp .rd-ranking-heading h2 { color:var(--rd-ink) !important; font-size:18px !important; line-height:1.35 !important; margin:0 !important; padding:0 !important; }
 .rd-section-heading .rd-section-subtitle { margin:0; }
+.stApp .st-key-rd_detail .rd-section-heading h2 { flex-shrink:0; white-space:nowrap; }
+.stApp .st-key-rd_data_nav { background:#f7f9fa; border:1px solid var(--rd-line); border-radius:10px; padding:12px; }
+.stApp .st-key-rd_data_nav [data-testid="stRadio"] label { align-items:flex-start; border-radius:7px; padding:8px 4px; }
+.stApp .st-key-rd_data_nav [data-testid="stRadio"] label:hover { background:#e7f5fa; }
+.stApp .st-key-rd_data_nav [data-testid="stRadio"] p { font-size:13px; overflow-wrap:anywhere; }
+.stApp .st-key-rd_data_nav [data-testid="stCaptionContainer"] p { font-size:11px; }
+.stApp .st-key-rd_data_view { min-width:0; }
+.stApp .st-key-rd_data_view [data-testid="stTabs"] button { font-size:12px; }
+.stApp .st-key-rd_data_view [data-testid="stCaptionContainer"] p { overflow-wrap:anywhere; }
 .rd-card-grid { display:grid; gap:18px; grid-template-columns:repeat(4,minmax(0,1fr)); }
 .rd-card { background:var(--rd-surface); border:1px solid var(--rd-line); border-radius:12px; box-shadow:0 2px 10px rgba(24,25,28,.035); min-width:0; overflow:hidden; position:relative; transition:box-shadow .18s ease,transform .18s ease; }
 .rd-card:hover,.rd-card:focus-within { box-shadow:0 8px 24px rgba(24,25,28,.11); transform:translateY(-2px); }

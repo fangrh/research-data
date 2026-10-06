@@ -118,7 +118,10 @@ _WORKFLOWS = {
         "steps": ["open", "status", "stop"],
         "decision": "Use open for a managed background service; use serve for a foreground process controlled with Ctrl+C.",
         "example": _EXAMPLES["open"],
-        "notes": ["The default listener is local-only.", "status and stop address only a ResearchData-managed service."],
+        "notes": ["The default listener is local-only.", "status and stop address only a ResearchData-managed service.",
+                  "Open a run card, search its registered file list, and select a file and dependent variable for graph/table views.",
+                  "Preview styles and font sizes are editable; apply the preview recipe to the full plot editor or a project template.",
+                  "File selection controls displayed data and analysis input hashes; tables preview at most 100 values. Readers load the selected file fully."],
     },
     "agent": {
         "purpose": "Let an agent discover valid commands, flags, workflows, and launcher outputs.",

@@ -8,6 +8,144 @@ def test_app_import_is_lazy_and_plotting_is_available():
     assert callable(app.cli)
 
 
+def test_dataset_navigator_switches_file_variable_and_export_inputs(tmp_path, monkeypatch):
+    import sys
+    import numpy as np
+    import xarray as xr
+    from research_data.catalog import Catalog
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setattr(sys, "argv", ["streamlit"])
+    cat = Catalog(tmp_path / "catalog")
+    monkeypatch.setenv("RESEARCH_DATA_CATALOG", str(cat.root))
+    curve = tmp_path / "curve.csv"
+    curve.write_text("x,y\n3,8\n1,2\n", encoding="utf-8")
+    matrix = tmp_path / "map.nc"
+    xr.Dataset({"current": (("gate", "bias"), np.arange(6).reshape(2, 3), {"units": "A"}),
+                "noise": (("gate", "bias"), np.ones((2, 3)), {"units": "A"})},
+               coords={"gate": [2, 1], "bias": [3, 2, 1]}).to_netcdf(matrix)
+    log = tmp_path / "notes.txt"
+    log.write_text("Synthetic acquisition notes", encoding="utf-8")
+    with cat.run(title="Multiple files", project="test") as run:
+        first = run.add_artifact(curve, description="Sweep trace", profile={"x": "x"})
+        second = run.add_artifact(matrix, description="Gate map")
+        last = run.add_artifact(log, role="log")
+    app = AppTest.from_file(Path(__file__).parents[1] / "src/research_data/app.py", default_timeout=30)
+    app.query_params["pick"] = run.run_id
+    app.run()
+
+    def widget(collection, label): return next(item for item in collection if item.label == label)
+
+    assert not app.exception
+    assert app.session_state["viewer_artifact_id"] == first["artifact_id"]
+    assert app.session_state["viewer_recipe"]["x"] == "x"
+    widget(app.button, "生成图表").click().run()
+    assert list(app.session_state["figure"].data[0].y) == [8, 2]
+    widget(app.radio, "数据文件").set_value(second["artifact_id"]).run()
+    assert not app.exception
+    assert "figure" not in app.session_state
+    assert app.session_state["datasets"][0]["current"].shape == (2, 3)
+    assert app.session_state["viewer_recipe"]["kind"] == "heatmap"
+    assert widget(app.selectbox, "图形").value == "heatmap"
+    widget(app.selectbox, "显示变量").set_value("noise").run()
+    assert widget(app.selectbox, "显示变量").value == "noise"
+    assert app.session_state["viewer_recipe"]["z"] == "noise"
+    app.run()  # Stable variable selection across unrelated reruns.
+    assert widget(app.selectbox, "显示变量").value == "noise"
+    widget(app.selectbox, "查看风格").set_value("midnight").run()
+    widget(app.number_input, "查看字号").set_value(18).run()
+    widget(app.button, "在绘图编辑器中使用").click().run()
+    assert widget(app.selectbox, "风格").value == "midnight"
+    assert widget(app.number_input, "字号").value == 18
+    widget(app.button, "生成图表").click().run()
+    assert np.allclose(app.session_state["figure"].data[0].z, 1)
+    widget(app.button, "登记分析图").click().run()
+    analysis = cat.list_runs(filters={"kind": "analysis"})[0]
+    assert analysis["parameters"]["inputs"] == [{"run_id": run.run_id, "artifact_id": second["artifact_id"], "sha256": second["sha256"]}]
+    assert analysis["parameters"]["recipe"]["z"] == "noise"
+    widget(app.radio, "数据文件").set_value(last["artifact_id"]).run()
+    assert "datasets" not in app.session_state and "figure" not in app.session_state
+    assert widget(app.button, "加载所选运行").disabled
+    assert not app.exception
+
+
+def test_dataset_navigator_reads_only_selected_file_and_keeps_primary_run(tmp_path, monkeypatch):
+    import sys
+    from research_data.catalog import Catalog
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setattr(sys, "argv", ["streamlit"])
+    cat = Catalog(tmp_path / "catalog")
+    monkeypatch.setenv("RESEARCH_DATA_CATALOG", str(cat.root))
+    source = tmp_path / "curve.csv"
+    runs = []
+    for number in (1, 9):
+        source.write_text(f"x,y\n2,{number}\n1,{number * 2}\n", encoding="utf-8")
+        with cat.run(title=f"Run {number}", project="same") as run:
+            run.add_artifact(source, profile={"x": "x"})
+        runs.append(run)
+    extra = tmp_path / "other.csv"
+    extra.write_text("x,other\n2,33\n1,44\n", encoding="utf-8")
+    other = runs[1].add_artifact(extra, description="Alternate signal", profile={"x": "x"})
+    original_load = Catalog.load_dataset
+    loaded = []
+    def record_load(self, run_id, artifact_id=None, profile=None):
+        loaded.append((run_id, artifact_id))
+        return original_load(self, run_id, artifact_id, profile)
+    monkeypatch.setattr(Catalog, "load_dataset", record_load)
+    app = AppTest.from_file(Path(__file__).parents[1] / "src/research_data/app.py", default_timeout=30)
+    app.session_state["compare_ids"] = [runs[0].run_id]
+    app.query_params["pick"] = runs[1].run_id
+    app.run()
+    assert not app.exception
+    assert app.session_state["primary_dataset_index"] == 1
+    assert app.session_state["datasets"][1]["y"].values.tolist() == [9, 18]
+    assert len(loaded) == 2
+    app.run()
+    assert len(loaded) == 2  # No reloading while navigating views or styles.
+    widget = next(item for item in app.text_input if item.label == "搜索文件 / 变量")
+    widget.set_value("Alternate signal").run()
+    assert app.session_state["viewer_artifact_id"] == other["artifact_id"]
+    assert app.session_state["datasets"][1]["other"].values.tolist() == [33, 44]
+    assert len(loaded) == 4
+    next(item for item in app.text_input if item.label == "搜索文件 / 变量").set_value("absent").run()
+    assert app.session_state["viewer_artifact_id"] == other["artifact_id"]
+    assert len(loaded) == 4
+    app.run()
+    assert app.session_state["viewer_artifact_id"] == other["artifact_id"]
+    assert len(loaded) == 4
+    assert not app.exception
+
+
+def test_heatmap_editor_uses_current_run_with_older_comparison_and_rejects_changed_bytes(tmp_path, monkeypatch):
+    import sys
+    import numpy as np
+    import xarray as xr
+    from research_data.catalog import Catalog
+    from streamlit.testing.v1 import AppTest
+    monkeypatch.setattr(sys, "argv", ["streamlit"])
+    cat = Catalog(tmp_path / "catalog")
+    monkeypatch.setenv("RESEARCH_DATA_CATALOG", str(cat.root))
+    source = tmp_path / "map.nc"
+    runs = []
+    for value in (1, 8):
+        xr.Dataset({"z": (("a", "b"), np.full((2, 3), value))}, coords={"a": [2, 1], "b": [3, 2, 1]}).to_netcdf(source)
+        with cat.run(title=f"Map {value}", project="maps") as run:
+            artifact = run.add_artifact(source)
+        runs.append(run)
+    app = AppTest.from_file(Path(__file__).parents[1] / "src/research_data/app.py", default_timeout=30)
+    app.session_state["compare_ids"] = [runs[0].run_id]
+    app.query_params["pick"] = runs[1].run_id
+    app.run()
+    next(item for item in app.button if item.label == "生成图表").click().run()
+    assert not app.exception
+    assert np.allclose(app.session_state["figure"].data[0].z, 8)
+    assert app.session_state["figure_inputs"] == [{"run_id": runs[1].run_id, "artifact_id": artifact["artifact_id"], "sha256": artifact["sha256"]}]
+    (runs[1].path / artifact["path"]).write_bytes(b"changed data")
+    next(item for item in app.button if item.label == "加载所选运行").click().run()
+    assert not app.exception
+    assert "figure" not in app.session_state and "datasets" not in app.session_state
+    assert any("integrity" in item.value for item in app.error)
+
+
 def test_recommendations_balance_projects_without_mutating_runs():
     from research_data.app import _browse_order
     runs = [{"run_id": str(i), "project": project, "created_at": str(i)}

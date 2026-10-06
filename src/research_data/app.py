@@ -93,6 +93,39 @@ def _reset_on_run_change(st, identity):
         for key in ("datasets", "dataset_ids", "figure", "figure_recipe", "figure_inputs", "figure_source_snapshot", "figure_provenance", "figure_archive", "static_download", "loaded_recipe", "figure_generated", "project_recipe_names", "plot_x", "plot_y", "plot_kind", "plot_z", "plot_y_axis", "plot_component", "plot_theme"):
             st.session_state.pop(key, None)
 
+def _reset_file_state(st, identity):
+    """File selection is part of data identity, independently of the run basket."""
+    if st.session_state.get("data_identity") != identity:
+        st.session_state["data_identity"] = identity
+        st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
+        for key in ("datasets", "dataset_ids", "figure", "figure_recipe", "figure_inputs",
+                    "figure_source_snapshot", "figure_provenance", "figure_archive",
+                    "static_download", "loaded_recipe", "figure_generated", "viewer_identity", "viewer_recipe", "player"):
+            st.session_state.pop(key, None)
+
+def _load_selected_data(st, catalog, run, selected_runs, artifact, reload=False):
+    inputs = []
+    for item in selected_runs:
+        art = artifact if item["run_id"] == run["run_id"] else catalog.select_artifact(item["run_id"])
+        inputs.append({"run_id": item["run_id"], "artifact_id": art["artifact_id"], "sha256": art.get("sha256")})
+    identity = (str(catalog.root), tuple((i["run_id"], i["artifact_id"], i["sha256"]) for i in inputs))
+    _reset_file_state(st, identity)
+    if reload or "datasets" not in st.session_state:
+        # Verify selected bytes before loading. Never pre-load the file inventory.
+        datasets = [catalog.load_dataset(i["run_id"], artifact_id=i["artifact_id"]) for i in inputs]
+        st.session_state.update(datasets=datasets, dataset_ids=inputs)
+    primary = next(i for i, item in enumerate(inputs) if item["run_id"] == run["run_id"])
+    st.session_state["primary_dataset_index"] = primary
+    return st.session_state["datasets"][primary]
+
+def _plot_selection(st, datasets, recipe, selected_runs):
+    """The heatmap renderer consumes one dataset: use the currently open run."""
+    indices = [st.session_state.get("primary_dataset_index", 0)] if recipe.get("kind") == "heatmap" else list(range(len(datasets)))
+    inputs = st.session_state.get("dataset_ids", [])
+    return ([datasets[i] for i in indices],
+            [selected_runs[i].get("title", selected_runs[i]["run_id"]) for i in indices],
+            [inputs[i] for i in indices])
+
 def _run_card(st, run):
     st.caption(f"Run: {run['run_id']} · 项目: {run.get('project')} · 样品: {run.get('sample') or '未声明'} · {run.get('kind')} / {run.get('execution_status')}")
     classifications = run.get("categories", {})
@@ -108,77 +141,152 @@ def _run_card(st, run):
     p = run.get("provenance") or {}
     st.caption(f"Git：{p.get('commit') or p.get('git_commit') or '未知'} / 分支：{p.get('git_branch') or p.get('branch') or '未知'}")
 
-def _player(st, catalog, run, root: str):
-    """Bilibili 式播放器：进入视频页立即看图/动画，无需先点加载。
+def _file_size(size):
+    size = float(size or 0)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB": return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
 
-    优先展示已登记的图片 artifact；否则自动加载主数据渲染默认折线图；
-    数据含逐步演化矩阵时提供动画 GIF 标签页。
-    """
+def _dataset_browser(st, catalog, run, selected_runs):
+    """One visible file selection owns the preview, editor and analysis inputs."""
+    from research_data.dataset_view import artifact_inventory, dataset_variables, default_recipe, bounded_preview
+    from research_data.catalog import _inside, _sha
+    inventory = artifact_inventory(run)
+    if not inventory:
+        _reset_file_state(st, (str(catalog.root), run["run_id"], None))
+        st.session_state.update(viewer_artifact_id=None, viewer_loadable=False)
+        st.info("此运行还没有登记文件。")
+        return
     rid = run["run_id"]
-    figures = [a for a in run.get("artifacts", [])
-               if a.get("role") in {"figure", "plot"} and a.get("format") in {"png", "jpg", "jpeg", "webp"}]
-    if figures:
-        st.session_state["player"] = "figures"
-        for a in figures:
-            try:
-                from research_data.catalog import _inside
-                path = _inside(catalog.root / "runs" / rid, a["path"])
-                if path.is_file():
-                    st.image(path.read_bytes(), caption=a.get("description") or a.get("original_name"))
-            except Exception:
-                pass
-        return
-    try:
-        art = catalog.select_artifact(rid)
-        ds = catalog.load_dataset(rid, artifact_id=art.get("artifact_id"))
-    except Exception as exc:
-        st.session_state["player"] = "unavailable"
-        st.info(f"此运行无可自动播放的数据（{exc}）。")
-        return
-    tab_img, tab_vid = st.tabs(["📈 图", "🎬 动画"])
-    with tab_img:
-        st.session_state["player"] = "plot"
-        try:
-            axes = list(ds.coords) or [n for n, v in ds.data_vars.items() if v.ndim == 1]
-            ys = [n for n, v in ds.data_vars.items() if v.ndim == 1][:2] or list(ds.data_vars)[:1]
-            recipe = {"kind": "line", "x": axes[0] if axes else None, "y": ys, "theme": "paper"}
-            fig = render_plot([ds], recipe)
-            st.plotly_chart(fig, use_container_width=True, key=f"player_{rid}")
-        except Exception:
-            from research_data.thumbnails import cover_for_dataset
-            png = cover_for_dataset(ds)
-            if png:
-                st.image(png, use_container_width=True)
-            else:
-                st.caption("该数据无默认图；用下方“加载所选运行”后自由绘图。")
-    with tab_vid:
-        from research_data.thumbnails import matrix_for_dataset
-        found = matrix_for_dataset(ds)
-        if found is None:
-            st.caption("该数据没有逐步演化维度，无动画。")
+    st.markdown(section_html("数据查看器", f"{len(inventory)} 个文件 · 选择文件，再选择变量"), unsafe_allow_html=True)
+    nav, view = st.columns([1, 2.2])
+    with nav, st.container(key="rd_data_nav"):
+        query = st.text_input("搜索文件 / 变量", key=f"file_search_{rid}", placeholder="文件名、说明或变量")
+        matches = artifact_inventory(run, query)
+        by_id = {a["artifact_id"]: a for a in inventory}
+        current_key = f"file_choice_{rid}"
+        default = next((a for a in inventory if a["loadable"]), inventory[0])["artifact_id"]
+        remembered_key = f"selected_file_{rid}"
+        selected = st.session_state.get(current_key, st.session_state.get(remembered_key, default))
+        if selected not in by_id: selected = default
+        if matches:
+            # Keep the list small even when one run contains thousands of outputs.
+            page_key = f"file_page_{rid}"
+            pages = max(1, -(-len(matches) // 20))
+            if st.session_state.get(f"file_filter_{rid}") != query:
+                st.session_state[page_key] = 1
+                st.session_state[f"file_filter_{rid}"] = query
+            page = min(st.session_state.get(page_key, 1), pages)
+            visible = matches[(page - 1) * 20:page * 20]
+            options = [a["artifact_id"] for a in visible]
+            if selected not in options: selected = options[0]
+            st.session_state[current_key] = selected
+            with st.container(height=min(300, 100 * len(visible) + 46)):
+                selected = st.radio("数据文件", options, key=current_key, format_func=lambda aid: by_id[aid]["name"],
+                                    captions=[f"{a['format'].upper()} · {_file_size(a['size_bytes'])} · {len(a['variables'])} 变量\n{a['description'][:90]}" for a in visible])
+            if pages > 1: st.pagination(pages, key=page_key, max_visible_pages=3)
         else:
-            name, matrix = found
-            st.caption(f"变量 `{name}`：{matrix.shape[0]} 帧逐行播放（全局归一化）")
-            _gif = _player_gif(str(root), rid, art.get("artifact_id"), art.get("sha256"), name)
-            if _gif:
-                st.image(_gif, use_container_width=True)
-
-
-def _player_gif(catalog_root: str, run_id: str, artifact_id, sha, var_name: str):
-    import numpy as np
-    from research_data.thumbnails import animated_gif
-    try:
-        from research_data.catalog import Catalog
-        cat = Catalog(catalog_root)
-        ds = cat.load_dataset(run_id, artifact_id=artifact_id)
-        for name, var in ds.data_vars.items():
-            if name == var_name:
-                v = np.asarray(var.values)
-                matrix = np.vstack([np.atleast_1d(np.asarray(x)) for x in v]) if v.dtype == object else v
-                return animated_gif(matrix)
-    except Exception:
-        return None
-    return None
+            st.caption("没有匹配文件；仍显示当前选中的数据。")
+        st.session_state[remembered_key] = selected
+        art = next(a for a in run["artifacts"] if a["artifact_id"] == selected)
+        summary = by_id[selected]
+        ds = None
+        reload = st.button("加载所选运行", disabled=not summary["loadable"], help="数据已自动读取。此按钮重新校验当前文件；对比运行使用各自的默认数据文件。")
+        if summary["loadable"]:
+            try: ds = _load_selected_data(st, catalog, run, selected_runs, art, reload=reload)
+            except Exception as exc:
+                _reset_file_state(st, (str(catalog.root), rid, selected, "unavailable"))
+                st.error(f"无法加载所选数据：{exc}")
+        else:
+            _reset_file_state(st, (str(catalog.root), rid, selected, art.get("sha256")))
+        st.session_state["viewer_artifact_id"] = selected
+        st.session_state["viewer_loadable"] = summary["loadable"]
+        variable = None
+        groups = dataset_variables(ds) if ds is not None else []
+        if groups:
+            names = [g["name"] for g in groups]
+            preferred = next((n for n in names if default_recipe(ds, n)), names[0])
+            variable = st.selectbox("显示变量", names, index=names.index(preferred), key=f"viewer_variable_{rid}_{selected}")
+            group = next(g for g in groups if g["name"] == variable)
+            st.caption(f"{group['unit'] or '单位未声明'} · 形状 {tuple(group['shape'])}")
+            st.caption("依赖坐标：" + (" → ".join(group["coordinates"]) or "未声明；表格显示索引"))
+            if group["description"]: st.caption(group["description"])
+        st.session_state["viewer_variable"] = variable
+    with view, st.container(key="rd_data_view"):
+        st.markdown("**" + summary["name"].replace("*", "\\*") + "**")
+        st.caption(summary["description"] or "文件说明未填写")
+        plot_tab, table_tab, info_tab, animation_tab = st.tabs(["📈 图表", "▦ 数据表", "变量 / 文件详情", "🎬 动画"], key=f"viewer_tabs_{rid}", on_change="rerun")
+        if ds is not None and variable is not None:
+            preview_recipe = default_recipe(ds, variable)
+            viewer_identity = (selected, variable)
+            if st.session_state.get("viewer_identity") != viewer_identity:
+                st.session_state["viewer_identity"] = viewer_identity
+                st.session_state["loaded_recipe"] = copy.deepcopy(preview_recipe or {})
+                st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
+                for k in ("figure", "figure_recipe", "figure_inputs", "static_download", "figure_generated", "viewer_recipe"):
+                    st.session_state.pop(k, None)
+            with plot_tab:
+                if preview_recipe:
+                    rev = f"{rid}_{selected}_{variable}"
+                    theme_col, font_col = st.columns([2, 1])
+                    theme = theme_col.selectbox("查看风格", list(THEMES), key=f"viewer_theme_{rid}", format_func=lambda n: f"{n} — {THEMES[n]['description']}")
+                    font_size = font_col.number_input("查看字号", 6, 40, 14, key=f"viewer_font_{rid}")
+                    preview_recipe.update(theme=theme, height=380, style={"font_size": font_size, "tick_size": font_size, "axis_title_size": font_size})
+                    if ds[variable].dtype.kind == "c":
+                        preview_recipe["component"] = st.selectbox("查看复数分量", ["real", "imag", "abs", "phase"], key=f"viewer_component_{rev}")
+                    if preview_recipe.get("slices"):
+                        preview_recipe["slices"] = {dim: st.number_input(f"查看切片 {dim}", 0, ds.sizes[dim] - 1, 0, key=f"viewer_slice_{dim}_{rev}") for dim in preview_recipe["slices"]}
+                    try:
+                        fig = render_plot([ds], preview_recipe, labels=[run.get("title", rid)])
+                        st.plotly_chart(fig, use_container_width=True, theme=None, key=f"player_{rid}")
+                        st.session_state["viewer_recipe"] = copy.deepcopy(preview_recipe)
+                        st.session_state["player"] = "plot"
+                        if st.button("在绘图编辑器中使用", key=f"viewer_apply_{rid}"):
+                            st.session_state["loaded_recipe"] = copy.deepcopy(preview_recipe)
+                            st.session_state["widget_rev"] += 1
+                            st.rerun()
+                    except Exception as exc: st.info(f"此变量暂无法自动绘图：{exc}；可查看数据表或使用下方配方。")
+                else: st.info("此变量是标量、文本或缺少可绘制坐标；请查看数据表，或在下方指定绘图配方。")
+            with table_tab:
+                if table_tab.open:
+                    frame = bounded_preview(ds, variable, limit=100)
+                    # Arrow cannot encode complex numbers; retain exact values as text.
+                    for col in frame:
+                        if frame[col].dtype.kind == "c": frame[col] = frame[col].map(str)
+                    st.dataframe(frame, hide_index=True, use_container_width=True)
+                    st.caption(f"显示前 {len(frame)} / {ds[variable].size:,} 个值 · 保留登记数据顺序")
+            with animation_tab:
+                if animation_tab.open and ds[variable].ndim == 2 and ds[variable].dtype.kind in "biufc":
+                    from research_data.thumbnails import animated_gif
+                    from research_data.plotting import _component
+                    component = preview_recipe.get("component", "real") if preview_recipe else "real"
+                    st.caption(f"{variable}：沿 {ds[variable].dims[0]} 逐行播放 · {component} · 全局归一化")
+                    try:
+                        gif = animated_gif(_component(ds[variable].values, component))
+                        if gif: st.image(gif, use_container_width=True)
+                        else: st.caption("此矩阵没有足够的有效值生成动画。")
+                    except Exception as exc: st.caption(f"动画不可用：{exc}")
+                elif animation_tab.open: st.caption("此变量没有可逐行播放的二维矩阵。")
+        elif not summary["loadable"]:
+            with plot_tab:
+                path = _inside(catalog.root / "runs" / rid, art["path"])
+                if path.is_file() and _sha(path) == art.get("sha256"):
+                    if summary["format"] in {"png", "jpg", "jpeg", "webp", "gif"}:
+                        st.image(path.read_bytes(), caption=summary["description"])
+                        st.session_state["player"] = "figures"
+                    else: st.info("此文件是日志、配方、已登记图或暂不支持的格式；可在文件详情中下载。")
+                else: st.error("文件缺失或校验不符。")
+        with info_tab:
+            if info_tab.open:
+                if groups: st.dataframe(groups, hide_index=True, use_container_width=True)
+                elif summary["variables"]: st.dataframe(summary["variables"], hide_index=True, use_container_width=True)
+                st.caption(f"Artifact: {selected} · SHA256: {art.get('sha256', '未知')}")
+                st.json({"format": summary["format"], "role": summary["role"], "profile": art.get("profile"), "metadata": art.get("metadata")})
+                path = _inside(catalog.root / "runs" / rid, art["path"])
+                if path.is_file() and _sha(path) == art.get("sha256"):
+                    st.download_button("下载原始文件", path.read_bytes(), file_name=summary["name"], key="download_artifact")
+                else: st.error("文件缺失或校验不符，无法下载。")
+    return art
 
 
 def _data_artifact(run):
@@ -504,10 +612,6 @@ def main(root: str | None = None) -> None:
     current = next((r for r in filtered if r["run_id"] == card_pick), None) or \
               (filtered[picked[0]] if picked else filtered[0])
     compare_ids = list(st.session_state.get("compare_ids") or [])
-    col_cur, col_add = st.columns([5, 1])
-    col_cur.caption(f"当前运行：{current.get('title')} · {current.get('run_id')}")
-    if col_add.button("加入对比") and current["run_id"] not in compare_ids and len(compare_ids) < 6:
-        compare_ids.append(current["run_id"]); st.session_state["compare_ids"] = compare_ids; st.rerun()
     if compare_ids:
         chips = st.columns(min(len(compare_ids) + 1, 7))
         for i, rid in enumerate(compare_ids):
@@ -524,7 +628,7 @@ def main(root: str | None = None) -> None:
     page_l, page_r = st.columns([4, 1.3])
     with page_l, st.container(key="rd_detail"):
         st.markdown(detail_html(run), unsafe_allow_html=True)
-        _player(st, catalog, run, str(root))
+        _dataset_browser(st, catalog, run, selected_runs)
         with st.expander("运行详情 / 来源与参数"):
             _run_card(st, run)
         state = social.state(run["run_id"])
@@ -560,6 +664,8 @@ def main(root: str | None = None) -> None:
         except Exception:
             pass
     with page_r, st.container(key="rd_related"):
+        if st.button("加入对比", use_container_width=True) and current["run_id"] not in compare_ids and len(compare_ids) < 6:
+            compare_ids.append(current["run_id"]); st.session_state["compare_ids"] = compare_ids; st.rerun()
         related_pool = [r for r in filtered if r.get("project") == run.get("project")
                         and r["run_id"] != run["run_id"]][:6]
         if related_pool:
@@ -577,43 +683,17 @@ def main(root: str | None = None) -> None:
                 except zipfile.BadZipFile: st.error("来源归档损坏，无法浏览。")
                 st.download_button("下载来源快照", archive.read_bytes(), file_name="snapshot.zip", mime="application/zip")
             else: st.info("此运行没有可用来源快照。")
-    artifacts = run.get("artifacts", []) or []
-    artifact_names = {f"{a.get('original_name', a.get('path', 'artifact'))} · {a.get('artifact_id', '')}": a for a in artifacts}
-    artifact_key = st.selectbox("主数据文件", list(artifact_names) or ["无 artifact"])
-    if artifact_names:
-        chosen_artifact = artifact_names[artifact_key]
-        from research_data.catalog import _inside
-        artifact_path = _inside(catalog.root / "runs" / run["run_id"], chosen_artifact["path"])
-        st.caption(chosen_artifact.get("description") or "未填写文件说明")
-        if artifact_path.is_file():
-            st.download_button("下载原始文件", artifact_path.read_bytes(), file_name=chosen_artifact["original_name"], key="download_artifact")
-        if chosen_artifact.get("role") in {"figure", "recipe"}:
-            if chosen_artifact.get("format") in {"png", "jpg", "jpeg", "webp"}:
-                st.image(str(artifact_path))
-            st.info("此文件是已登记的图或配方；上方数据记录包含其输入来源，点击下载即可查看。")
-            return
-    if st.button("加载所选运行") and artifact_names:
-        try:
-            datasets, ids = [], []
-            for item in selected_runs:
-                art = catalog.select_artifact(item["run_id"]) if item["run_id"] != run["run_id"] else artifact_names[artifact_key]
-                art = catalog.select_artifact(item["run_id"], artifact_id=art.get("artifact_id"))
-                datasets.append(catalog.load_dataset(item["run_id"], artifact_id=art.get("artifact_id")))
-                ids.append({"run_id": item["run_id"], "artifact_id": art.get("artifact_id"), "sha256": art.get("sha256")})
-            st.session_state.update(datasets=datasets, dataset_ids=ids)
-        except Exception as exc:
-            for key in ("datasets", "dataset_ids", "figure", "figure_inputs", "static_download"):
-                st.session_state.pop(key, None)
-            st.error(f"无法加载数据：{exc}")
     datasets = st.session_state.get("datasets")
-    if not datasets: st.info("点击“加载所选运行”开始预览和绘图。"); return
-    ds = datasets[0]
-    with st.expander("变量与预览", expanded=True):
+    if not datasets: return
+    ds = datasets[st.session_state.get("primary_dataset_index", 0)]
+    with st.expander("变量与预览", expanded=False):
         st.dataframe({n: {"维度": str(v.dims), "形状": str(v.shape), "单位": v.attrs.get("units", "未声明"), "类型": str(v.dtype)} for n, v in ds.data_vars.items()})
-        try: st.dataframe(ds.to_dataframe().reset_index().head(100), use_container_width=True)
-        except Exception as exc: st.warning(f"表格预览不可用：{exc}")
-    st.subheader("绘图"); names, axes = list(ds.data_vars), list(ds.coords) or list(ds.variables)
+        st.caption("选中变量的前 100 个值在上方“数据表”中查看。")
+        if len(datasets) > 1: st.json(st.session_state.get("dataset_ids", []))
+    names, axes = list(ds.data_vars), list(ds.coords) or list(ds.variables)
     axes = list(dict.fromkeys([*axes, *[name for name, value in ds.data_vars.items() if value.ndim == 1]]))
+    if not names or not axes: st.info("此文件没有可供配方使用的变量和坐标。"); return
+    st.subheader("绘图编辑器")
     loaded_recipe = copy.deepcopy(st.session_state.get("loaded_recipe", {}))
     loaded = {**loaded_recipe, **(loaded_recipe.get("style", {}) if isinstance(loaded_recipe.get("style"), dict) else {})}
     x_default = loaded.get("x") if loaded.get("x") in axes else axes[0]
@@ -681,7 +761,8 @@ def main(root: str | None = None) -> None:
                     incoming = project_templates.recipe(chosen.removeprefix("project:"))
                 else:
                     incoming = catalog.load_recipe(chosen)
-                st.session_state["loaded_recipe"] = _validate_recipe_for_data(incoming, datasets, [r.get("title", r["run_id"]) for r in selected_runs])
+                plot_data, plot_labels, _ = _plot_selection(st, datasets, incoming, selected_runs)
+                st.session_state["loaded_recipe"] = _validate_recipe_for_data(incoming, plot_data, plot_labels)
                 st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
                 st.rerun()
             except Exception as exc:
@@ -711,7 +792,8 @@ def main(root: str | None = None) -> None:
                 if incoming.get("kind") == "panels":
                     panels = incoming.get("panels")
                     if not isinstance(panels, list) or not panels: raise ValueError("panels 必须是非空列表")
-                st.session_state["loaded_recipe"] = _validate_recipe_for_data(incoming, datasets, [r.get("title", r["run_id"]) for r in selected_runs])
+                plot_data, plot_labels, _ = _plot_selection(st, datasets, incoming, selected_runs)
+                st.session_state["loaded_recipe"] = _validate_recipe_for_data(incoming, plot_data, plot_labels)
                 st.session_state["widget_rev"] = int(st.session_state.get("widget_rev", 0)) + 1
                 st.rerun()
             except Exception as exc:
@@ -720,14 +802,15 @@ def main(root: str | None = None) -> None:
         try:
             from research_data.provenance import capture_provenance
             with tempfile.TemporaryDirectory() as td:
-                provenance = capture_provenance(Path(__file__).parent, td, entrypoint="app.py", source_paths=["app.py", "plotting.py", "project.py", "ui.py"])
+                provenance = capture_provenance(Path(__file__).parent, td, entrypoint="app.py", source_paths=["app.py", "plotting.py", "project.py", "ui.py", "dataset_view.py"])
                 source_archive = (Path(td) / provenance["snapshot"]["path"]).read_bytes()
             source_snapshot = provenance["snapshot"]["files"]
             origin = _project_origin(recipe) or _project_origin(loaded)
             if origin:
                 recipe["_project_template"] = origin
-            fig = render_plot(datasets, recipe, labels=[r.get("title", r["run_id"]) for r in selected_runs])
-            st.session_state.update(figure=fig, figure_recipe=copy.deepcopy(recipe), figure_inputs=list(st.session_state.get("dataset_ids", [])), figure_source_snapshot=source_snapshot, figure_provenance=provenance, figure_archive=source_archive, figure_generated=True)
+            plot_data, plot_labels, plot_inputs = _plot_selection(st, datasets, recipe, selected_runs)
+            fig = render_plot(plot_data, recipe, labels=plot_labels)
+            st.session_state.update(figure=fig, figure_recipe=copy.deepcopy(recipe), figure_inputs=plot_inputs, figure_source_snapshot=source_snapshot, figure_provenance=provenance, figure_archive=source_archive, figure_generated=True)
             st.session_state.pop("static_download", None)
         except Exception as exc:
             for key in ("figure", "figure_inputs", "figure_recipe", "static_download"):
@@ -742,8 +825,10 @@ def main(root: str | None = None) -> None:
             live_recipe["_project_template"] = origin
         previous_recipe = st.session_state.get("figure_recipe", {})
         try:
-            fig = render_plot(datasets, live_recipe, labels=[r.get("title", r["run_id"]) for r in selected_runs])
+            plot_data, plot_labels, plot_inputs = _plot_selection(st, datasets, live_recipe, selected_runs)
+            fig = render_plot(plot_data, live_recipe, labels=plot_labels)
             st.session_state["figure"] = fig
+            st.session_state["figure_inputs"] = plot_inputs
             st.session_state["figure_recipe"] = copy.deepcopy(live_recipe)
             if live_recipe != previous_recipe:
                 st.session_state.pop("static_download", None)
