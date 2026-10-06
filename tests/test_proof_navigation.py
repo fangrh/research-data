@@ -43,6 +43,7 @@ def test_generated_proof_opens_owner_history_and_exact_revision(tmp_path, monkey
     app.query_params.update(pick=second['analysis_run_id'], view='proof')
     app.run()
     assert not app.exception
+    assert [tab.label for tab in app.tabs][:3] == ['图形编辑', '文章排版', '校样审阅']
     versions = next(widget for widget in app.selectbox if widget.label == '查看校样版本')
     assert len(versions.options) == 2
     assert versions.value == second['revision_id']
@@ -58,6 +59,20 @@ def test_generated_proof_opens_owner_history_and_exact_revision(tmp_path, monkey
     assert not app.exception
     assert store.comments(run.run_id, first['revision_id'])[0]['text'] == 'Review on the older exact revision'
     assert store.comments(run.run_id, second['revision_id']) == []
+
+    # The article pane saves the same owner's draft without replacing its
+    # scene or changing already frozen revisions/comments.
+    scene_before = store.draft(run.run_id)['scene']
+    next(widget for widget in app.text_area if widget.label == '图注').set_value('Unified workspace caption')
+    next(widget for widget in app.button if widget.label == '保存文章内容').click().run()
+    assert not app.exception
+    saved_article = store.draft(run.run_id)
+    assert saved_article['document']['caption'] == 'Unified workspace caption'
+    assert saved_article['scene'] == scene_before
+    assert next(widget for widget in app.selectbox if widget.label == '查看校样版本').value == first['revision_id']
+    frozen_path = Path(store.get(run.run_id, second['revision_id'])['path']) / 'document.json'
+    frozen = json.loads(frozen_path.read_text(encoding='utf-8'))
+    assert frozen['caption'] == 'Second synthetic caption'
 
     manifest_artifact = next(a for a in opened['artifacts'] if a['role'] == 'proof-manifest')
     manifest_path = catalog.root / 'runs' / opened['run_id'] / manifest_artifact['path']

@@ -1,6 +1,6 @@
 """Scientific run catalog with exact source provenance and reusable plotting."""
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 
 def __getattr__(name):

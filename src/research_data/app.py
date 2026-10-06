@@ -332,6 +332,41 @@ def _search_home(st):
     st.session_state.pop("card_pick", None)
     st.session_state.pop("up_filter", None)
 
+def _data_discussion(st, social, root, run):
+    state = social.state(run["run_id"])
+    act_a, act_b, act_c = st.columns([1, 1, 3])
+    if act_a.button(("👍 已赞" if state["liked"] else "👍 点赞"), key=f"like_{run['run_id']}",
+                    type="primary" if state["liked"] else "secondary", use_container_width=True):
+        social.like(run["run_id"], not state["liked"]); st.rerun()
+    if act_b.button(("⭐ 已收藏" if state["favorite"] else "⭐ 收藏"), key=f"fav_{run['run_id']}",
+                    type="primary" if state["favorite"] else "secondary", use_container_width=True):
+        social.favorite(run["run_id"], not state["favorite"]); st.rerun()
+    act_c.caption(f"{state['comments']} 条评论")
+    st.markdown("**💬 评论**")
+    for c in social.comments(run["run_id"]):
+        st.markdown(f"**{c['author']}** · `{(c.get('ts') or '')[:16].replace('T', ' ')}`\n\n{c['text']}")
+    new_comment = st.text_area("写评论", key=f"comment_box_{run['run_id']}", height=68)
+    post_col, agent_col = st.columns(2)
+    if post_col.button("发布评论", key=f"comment_post_{run['run_id']}", use_container_width=True) and new_comment.strip():
+        social.add_comment(run["run_id"], new_comment); st.rerun()
+    if agent_col.button("🤖 派 agent 评价", key=f"review_{run['run_id']}", use_container_width=True,
+                        help="把评论框内容作为评价指令派给 AI agent（research-data review 领取）"):
+        from research_data.review import request_review
+        request_review(root, run["run_id"], instruction=new_comment)
+        st.session_state[f"review_sent_{run['run_id']}"] = True
+        st.rerun()
+    if st.session_state.get(f"review_sent_{run['run_id']}"):
+        st.session_state.pop(f"review_sent_{run['run_id']}", None)
+        st.success("已派出评价请求：agent 用 `research-data review list` 领取并回复到这里。")
+    try:
+        from research_data.review import list_pending
+        pending_n = sum(1 for r in list_pending(root) if r["run_id"] == run["run_id"])
+        if pending_n:
+            st.caption(f"🤖 {pending_n} 条评价请求待 agent 处理")
+    except Exception:
+        pass
+
+
 def main(root: str | None = None) -> None:
     import streamlit as st
     st.set_page_config(page_title="研究数据浏览器", page_icon="📈", layout="wide")
@@ -503,7 +538,6 @@ def main(root: str | None = None) -> None:
     up_filter = st.session_state.get("up_filter")  # {"field": "generator"|"project", "value": str}
     if dedicated is not None:
         # ── 专属视频页（Bilibili BV 页）：整页只显示这组数据 ──
-        st.markdown(f"<a class='rd-back' href='{home_url.replace('&', '&amp;')}' target='_self'>← 返回首页</a>", unsafe_allow_html=True)
         related6 = sorted((r for r in runs
                            if r.get("project") == dedicated.get("project") and r["run_id"] != dedicated["run_id"]),
                           key=lambda r: r.get("created_at") or "", reverse=True)[:6]
@@ -627,7 +661,10 @@ def main(root: str | None = None) -> None:
     # ── 视频页布局：左侧数据卡+互动+评论，右侧相关推荐（Bilibili 式）──
     workspace_key = f"workspace_{run['run_id']}"
     with st.container(key="rd_workspaces"):
-        workspace = st.segmented_control("工作区", ["数据与绘图", "编辑与校样"], default="编辑与校样" if st.query_params.get("view") == "proof" else "数据与绘图", key=workspace_key)
+        back, modes = st.columns([1, 5], vertical_alignment="center")
+        back.markdown(f"<a class='rd-back' href='{home_url.replace('&', '&amp;')}' target='_self'>← 返回首页</a>", unsafe_allow_html=True)
+        with modes:
+            workspace = st.segmented_control("工作区", ["数据与绘图", "编辑与校样"], default="编辑与校样" if st.query_params.get("view") == "proof" else "数据与绘图", key=workspace_key, label_visibility="collapsed")
     proof_mode = workspace == "编辑与校样"
     if proof_mode:
         st.query_params["view"] = "proof"
@@ -635,46 +672,16 @@ def main(root: str | None = None) -> None:
         del st.query_params["view"]
     page_l, page_r = (st.container(), None) if proof_mode else st.columns([4, 1.3])
     with page_l, st.container(key="rd_detail"):
-        st.markdown(detail_html(run), unsafe_allow_html=True)
         if proof_mode:
             from research_data.proof_ui import render as render_proof_ui
             render_proof_ui(st, catalog, run)
         else:
+            st.markdown(detail_html(run), unsafe_allow_html=True)
             _dataset_browser(st, catalog, run, selected_runs)
         with st.expander("运行详情 / 来源与参数"):
             _run_card(st, run)
-        state = social.state(run["run_id"])
-        act_a, act_b, act_c = st.columns([1, 1, 3])
-        if act_a.button(("👍 已赞" if state["liked"] else "👍 点赞"), key=f"like_{run['run_id']}",
-                        type="primary" if state["liked"] else "secondary", use_container_width=True):
-            social.like(run["run_id"], not state["liked"]); st.rerun()
-        if act_b.button(("⭐ 已收藏" if state["favorite"] else "⭐ 收藏"), key=f"fav_{run['run_id']}",
-                        type="primary" if state["favorite"] else "secondary", use_container_width=True):
-            social.favorite(run["run_id"], not state["favorite"]); st.rerun()
-        act_c.caption(f"{state['comments']} 条评论")
-        st.markdown("**💬 评论**")
-        for c in social.comments(run["run_id"]):
-            st.markdown(f"**{c['author']}** · `{(c.get('ts') or '')[:16].replace('T', ' ')}`\n\n{c['text']}")
-        new_comment = st.text_area("写评论", key=f"comment_box_{run['run_id']}", height=68)
-        post_col, agent_col = st.columns(2)
-        if post_col.button("发布评论", key=f"comment_post_{run['run_id']}", use_container_width=True) and new_comment.strip():
-            social.add_comment(run["run_id"], new_comment); st.rerun()
-        if agent_col.button("🤖 派 agent 评价", key=f"review_{run['run_id']}", use_container_width=True,
-                            help="把评论框内容作为评价指令派给 AI agent（research-data review 领取）"):
-            from research_data.review import request_review
-            request_review(root, run["run_id"], instruction=new_comment)
-            st.session_state[f"review_sent_{run['run_id']}"] = True
-            st.rerun()
-        if st.session_state.get(f"review_sent_{run['run_id']}"):
-            st.session_state.pop(f"review_sent_{run['run_id']}", None)
-            st.success("已派出评价请求：agent 用 `research-data review list` 领取并回复到这里。")
-        try:
-            from research_data.review import list_pending
-            pending_n = sum(1 for r in list_pending(root) if r["run_id"] == run["run_id"])
-            if pending_n:
-                st.caption(f"🤖 {pending_n} 条评价请求待 agent 处理")
-        except Exception:
-            pass
+        with st.expander("数据讨论与收藏", expanded=False) if proof_mode else st.container():
+            _data_discussion(st, social, root, run)
     if workspace == "编辑与校样":
         return
     with page_r, st.container(key="rd_related"):
