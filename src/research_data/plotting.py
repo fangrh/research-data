@@ -71,7 +71,7 @@ def _style(recipe: Mapping[str, Any], theme: Mapping[str, Any]) -> dict[str, Any
     if supplied is None:
         supplied = {}
     if not isinstance(supplied, Mapping):
-        raise TypeError("style must be a mapping")
+        raise TypeError("style must be a mapping, for example {'line_width': 2, 'font_size': 14}; choose a top-level theme from: " + ", ".join(sorted(THEMES)))
     unknown = sorted(set(supplied) - _STYLE_KEYS)
     if unknown:
         raise ValueError(f"Unknown style key(s): {', '.join(map(repr, unknown))}; choose from {', '.join(sorted(_STYLE_KEYS))}")

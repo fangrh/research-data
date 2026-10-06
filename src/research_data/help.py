@@ -90,7 +90,7 @@ _WORKFLOWS = {
     "proof": {
         "purpose": "Compose figures in Three Interact, publish versioned journal-style proofs and review exact revisions.",
         "steps": ["open", "proof", "check"],
-        "decision": "Open a run, choose 编辑与校样, create a draft from the current plot, edit or add elements, then save a new proof. Agents use proof show --output draft.json, save with --expected-hash, and publish with a matching PNG export.",
+        "decision": "Open a run, choose 编辑与校样, create a draft from the current plot, edit or add elements, then save a new proof. Agents use proof show --output draft.json, save with --expected-hash, and publish with a matching PNG export. If proof show writes JSON null, no draft exists yet; create the initial draft from the browser run page before CLI editing.",
         "example": "research-data proof list --run-id RUN_ID",
         "notes": ["The editor, component library and host are bundled; no separate Three Interact server is needed.", "Source plot pixels are a panel; add vector labels, shapes, images and 3D viewports without altering scientific values.", "PDF/HTML, editable JSON/assets, input artifact hashes, generating source and editor identity are frozen per revision.", "Comment on an exact --revision and --anchor figure/caption/element:UUID. Replies stay in that revision.", "Review comments and editorial changes do not update scientific validation.", "Existing figure drafts and proofs are local; opening the browser does not publish or send them to an agent."],
     },
@@ -113,7 +113,7 @@ _WORKFLOWS = {
         "steps": ["search", "show", "plot", "check"],
         "decision": "Use a saved recipe for repeated plots and keep input run/artifact IDs with the resulting figure.",
         "example": _EXAMPLES["plot"],
-        "notes": ["Preserve acquisition order and declared units.", "Use --recipe project:NAME --project-dir PATH for project-local single or multi-panel structures.", "A figure does not establish physical validity."],
+        "notes": ["Preserve acquisition order and declared units.", "Use --recipe project:NAME --project-dir PATH for project-local single or multi-panel structures.", "A line recipe uses a mapping such as {\"kind\":\"line\",\"x\":\"time_s\",\"y\":\"signal\",\"theme\":\"paper\",\"style\":{\"line_width\":2,\"font_size\":14}}; style must be a mapping and theme is a top-level named palette.", "A figure does not establish physical validity."],
     },
     "customize": {
         "purpose": "Reuse project-local data mappings, typography and panel layouts.",

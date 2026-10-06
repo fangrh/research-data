@@ -87,6 +87,11 @@ def test_style_changes_appearance_without_changing_values(dataset):
         render_plot([dataset], {"x": "time", "y": "current", "layout": {"xaxis": {"range": [0, 1]}}})
 
 
+def test_style_type_error_explains_mapping_and_theme_schema(dataset):
+    with pytest.raises(TypeError, match="style must be a mapping.*line_width.*theme"):
+        render_plot([dataset], {"x": "time", "y": "current", "style": "default"})
+
+
 def test_panels_preserve_components_units_and_source_order(dataset):
     dataset["time"].attrs["units"] = "s"
     dataset["bias"].attrs["units"] = "V"

@@ -268,6 +268,7 @@ STYLES = """<style>
 [data-testid="stSidebar"] { display:none !important; }
 [data-testid="stMainBlockContainer"] { margin:0 auto; max-width:1600px; padding:1rem 2rem 3rem !important; }
 [class*="st-key-rd_header"], [class*="st-key-rd_toolbar"], [class*="st-key-rd_wall"], [class*="st-key-rd_sidebar"], [class*="st-key-rd_detail"] { min-width:0; }
+.stApp .st-key-rd_workspaces { position:sticky; top:0; z-index:20; background:var(--rd-bg); padding:6px 0; border-bottom:1px solid var(--rd-line); }
 .rd-shell { color:var(--rd-ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif; overflow-wrap:anywhere; }
 .stApp .rd-shell h1,.stApp .rd-shell h2,.stApp .rd-shell h3,.stApp .rd-shell p { margin-block-start:0 !important; }
 .stApp .rd-shell h1,.stApp .rd-shell h2,.stApp .rd-shell h3 { color:var(--rd-ink) !important; font-family:inherit !important; font-weight:700 !important; padding:0 !important; }

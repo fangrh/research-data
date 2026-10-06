@@ -48,8 +48,9 @@ Publish with `proof publish --figure matching.png`; use an exact revision and
 `--anchor caption`, `--anchor figure`, or `--anchor element:UUID` for comments.
 Replies use `--reply-to` in the same revision. The local proof creates a new
 analysis run with source and input hashes; it does not publish data remotely.
-See [the proof guide](../../../../docs/PROOFS.md) for the complete route and
-parser-derived command examples.
+See [the bundled proof guide](references/proofs.md) for the complete route and
+parser-derived command examples. This relative link remains valid after skill
+installation.
 
 ## Project-local data and plot structures
 

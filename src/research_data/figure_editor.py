@@ -39,11 +39,12 @@ def initial_payload(run, png=None, inputs=None, recipe=None):
             "editor": {"upstream": vendor_metadata(), "history": [], "orders": []}}
 
 
-def editor(payload, draft_hash, identity, reset_token=0, saved_notice="", key=None):
+def editor(payload, draft_hash, identity, reset_token=0, saved_notice="", acknowledged_event="", save_error="", key=None):
     import streamlit.components.v1 as components
     component = components.declare_component("research_data_three_interact", path=str(RESOURCES))
     return component(payload=payload, draft_hash=draft_hash, identity=identity, reset_token=reset_token,
-                     saved_notice=saved_notice, key=key, default=None)
+                     saved_notice=saved_notice, acknowledged_event=acknowledged_event,
+                     save_error=save_error, key=key, default=None)
 
 
 def scene_hash(payload):

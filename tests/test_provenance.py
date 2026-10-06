@@ -1,9 +1,10 @@
 import subprocess
 import zipfile
+import importlib.metadata
 
 import pytest
 
-from research_data.provenance import capture_provenance, inspect_snapshot
+from research_data.provenance import capture_provenance, environment_info, inspect_snapshot
 
 
 def git(root, *args):
@@ -68,3 +69,20 @@ def test_snapshot_corruption_is_detected(tmp_path):
     p = capture_provenance(repo, run, source_paths=["run.py"])
     (run / p["snapshot"]["path"]).write_bytes(b"corrupt")
     assert inspect_snapshot(p, run)["ok"] is False
+
+
+def test_environment_reports_runtime_version_separately_from_distribution(monkeypatch):
+    from pathlib import Path
+    import research_data
+    real_version = importlib.metadata.version
+
+    def stale_version(name):
+        if name == "research-data":
+            return "0.3.0"
+        return real_version(name)
+
+    monkeypatch.setattr(importlib.metadata, "version", stale_version)
+    info = environment_info()
+    assert info["packages"]["research-data"] == research_data.__version__
+    assert info["installed_distributions"]["research-data"] == "0.3.0"
+    assert Path(info["module_locations"]["research-data"]) == Path(research_data.__file__).resolve()

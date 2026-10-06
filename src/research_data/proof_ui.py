@@ -3,7 +3,28 @@ from __future__ import annotations
 
 import copy
 import json
+import html
 from pathlib import Path
+
+
+def proof_context(catalog, run):
+    """A generated proof card opens its actual owner's draft and revision history."""
+    expected = (run.get("parameters") or {}).get("proof_revision_id")
+    if not expected:
+        return run, None
+    from .catalog import _inside, _sha
+    artifact = next((a for a in run.get("artifacts", []) if a.get("role") == "proof-manifest"), None)
+    if artifact is None:
+        raise ValueError("该校样缺少来源清单，请检查此运行的完整性")
+    path = _inside(catalog.root / "runs" / run["run_id"], artifact["path"])
+    if _sha(path) != artifact["sha256"]:
+        raise ValueError("校样来源清单完整性校验失败")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if (manifest.get("schema") != "research-data.proof.v1"
+            or manifest.get("analysis_run_id") != run["run_id"]
+            or manifest.get("revision_id") != expected):
+        raise ValueError("校样来源清单与此运行不一致")
+    return catalog.get(manifest["run_id"]), expected
 
 
 def _seed(st, catalog, run):
@@ -58,11 +79,36 @@ def render(st, catalog, run):
     from .proofs import ProofStore
     from .figure_editor import editor, vendor_metadata
     store = ProofStore(catalog.root)
+    opened_run = run
+    try:
+        run, entry_revision = proof_context(catalog, run)
+    except Exception as exc:
+        st.error(f"无法定位校样来源：{exc}")
+        return
     rid = run["run_id"]
     prefix = f"proof_{rid}_"
+    if entry_revision and st.session_state.get(prefix + "entry") != opened_run["run_id"]:
+        st.session_state[prefix + "entry"] = opened_run["run_id"]
+        st.session_state[prefix + "revision"] = entry_revision
+        st.session_state[prefix + "version"] = entry_revision
+    if entry_revision:
+        from .ui import browse_url
+        st.info(f"此卡片是已发布校样 {entry_revision[:8]}；下方编辑源运行「{run['title']}」的当前草稿，并查看它的全部校样版本。")
+        owner_url = html.escape(browse_url(dict(st.query_params), pick=rid) + "&view=proof", quote=True)
+        st.markdown(f'<a href="{owner_url}" target="_self">打开源数据与全部校样</a>', unsafe_allow_html=True)
     draft = store.draft(rid)
+    revisions = store.revisions(rid)
     st.markdown("**✍️ 图形编辑与期刊校样**")
     st.caption("数据图作为可移动面板；文字、箭头、图片和组件可以继续添加。保存校样后，评论绑定该版本。")
+    st.caption("① 编辑图形（自动保存） → ② 保存文章内容 → ③ 保存并生成校样 → ④ 选择版本并评论")
+    published = st.session_state.get(prefix + "published")
+    if published:
+        st.success(f"校样 {published[:8]} 已生成；PDF、HTML 与评论入口位于下方。")
+    saved_error = st.session_state.get(prefix + "error", "")
+    if saved_error:
+        st.error(saved_error)
+    if revisions:
+        st.markdown(f'<a href="#proof-review-{rid}" target="_self">查看校样与评论（{len(revisions)} 个版本）</a>', unsafe_allow_html=True)
     if draft is None:
         if st.button("从当前数据图创建草稿", key=prefix + "create", type="primary"):
             try:
@@ -89,14 +135,18 @@ def render(st, catalog, run):
                     payload["document"] = dict(title=title, authors=authors, abstract=abstract, body=body, caption=caption, layout=layout)
                     try:
                         store.save_draft(rid, payload, expected_hash=draft["hash"])
+                        st.session_state[prefix + "notice"] = "文章内容已保存 · 图形编辑自动保存"
                         st.rerun()
                     except Exception as exc:
                         st.error(str(exc))
         value = editor(draft, draft["hash"], str(catalog.root) + "/" + rid,
                        reset_token=st.session_state.get(prefix + "reset", 0),
-                       saved_notice=st.session_state.pop(prefix + "notice", ""), key=prefix + "editor")
+                       saved_notice=st.session_state.pop(prefix + "notice", ""),
+                       acknowledged_event=st.session_state.get(prefix + "event", ""),
+                       save_error=saved_error, key=prefix + "editor")
         if value and value.get("event_id") != st.session_state.get(prefix + "event"):
             st.session_state[prefix + "event"] = value["event_id"]
+            st.session_state.pop(prefix + "error", None)
             try:
                 payload = copy.deepcopy(draft)
                 payload.update(scene=value["scene"], assets=value.get("assets", {}),
@@ -107,15 +157,18 @@ def render(st, catalog, run):
                     payload["figure_png"] = value["figure_png"]
                 store.save_draft(rid, payload, expected_hash=value.get("base_hash") or draft["hash"])
                 if value.get("action") == "publish":
-                    revision = store.publish(rid)
+                    with st.spinner("正在冻结图形、记录来源并生成 PDF / HTML 校样…"):
+                        revision = store.publish(rid)
                     st.session_state[prefix + "revision"] = revision["revision_id"]
                     st.session_state[prefix + "version"] = revision["revision_id"]
-                    st.session_state[prefix + "notice"] = "校样已保存 · 下方可查看和评论"
+                    st.session_state[prefix + "notice"] = f"校样 {revision['revision_id'][:8]} 已生成 · 下方可查看和评论"
+                    st.session_state[prefix + "published"] = revision["revision_id"]
                 else:
                     st.session_state[prefix + "notice"] = "草稿已保存到资料库"
                 st.rerun()
             except Exception as exc:
-                st.error(f"保存失败：{exc}。重新载入草稿后重试；当前画布仍保留。")
+                st.session_state[prefix + "error"] = f"保存失败：{exc}。重新载入草稿后重试；当前画布仍保留。"
+                st.rerun()
         col_a, col_b = st.columns(2)
         col_a.download_button("下载可编辑场景与资源", json.dumps(draft, ensure_ascii=False, indent=2), file_name="figure.proof-draft.json", mime="application/json")
         if col_b.button("重新载入本地草稿", key=prefix + "reload"):
@@ -131,11 +184,11 @@ def render(st, catalog, run):
                     st.rerun()
                 except Exception as exc:
                     st.error(str(exc))
-        st.caption(f"草稿 {draft['hash'][:12]} · Three Interact {vendor_metadata()['version']} · 保存按钮也支持 Ctrl+S")
+        st.caption(f"草稿 {draft['hash'][:12]} · 图形自动保存，文章需点击「保存文章内容」 · Three Interact {vendor_metadata()['version']} · Ctrl+S 保存图形")
 
-    revisions = store.revisions(rid)
     if not revisions:
         return
+    st.markdown(f'<div id="proof-review-{rid}"></div>', unsafe_allow_html=True)
     st.markdown("**📄 校样版本与评论**")
     options = [r["revision_id"] for r in revisions]
     remembered = st.session_state.get(prefix + "revision")

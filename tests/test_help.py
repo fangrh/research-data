@@ -42,6 +42,13 @@ def test_workflow_guide_supports_human_and_machine_forms():
     assert machine["workflows"]["agent"]["example"] == "research-data guide agent --json"
 
 
+def test_plot_and_proof_guidance_states_recipe_shape_and_empty_draft_route():
+    plot = workflow_guide("plot", machine=True)["workflows"]["plot"]
+    proof = workflow_guide("proof", machine=True)["workflows"]["proof"]
+    assert '"style":{"line_width":2,"font_size":14}' in "".join(plot["notes"])
+    assert "JSON null" in proof["decision"]
+
+
 def test_discovery_and_errors_do_not_mutate_catalog(tmp_path, monkeypatch, capsys):
     root = tmp_path / "absent catalog"
     monkeypatch.setenv("RESEARCH_DATA_CATALOG", str(root))

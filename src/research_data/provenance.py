@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.metadata
+import importlib
 import json
 import platform
 import subprocess
@@ -37,12 +38,24 @@ def _git(root: Path, *args: str) -> str | None:
 
 def environment_info() -> dict:
     versions = {}
+    installed_distributions = {}
     for package in ("research-data", "numpy", "pandas", "xarray", "plotly", "h5py", "streamlit", "qcodes", "pyarrow", "kaleido"):
         try:
-            versions[package] = importlib.metadata.version(package)
+            installed = importlib.metadata.version(package)
+            installed_distributions[package] = installed
+            versions[package] = installed
         except importlib.metadata.PackageNotFoundError:
             pass
-    return {"python": sys.version, "platform": platform.platform(), "packages": versions}
+    try:
+        runtime = importlib.import_module("research_data")
+        runtime_version = str(runtime.__version__)
+        versions["research-data"] = runtime_version
+        module_file = getattr(runtime, "__file__", None)
+        module_locations = {"research-data": str(Path(module_file).resolve())} if module_file else {}
+    except (ImportError, AttributeError):
+        module_locations = {}
+    return {"python": sys.version, "platform": platform.platform(), "packages": versions,
+            "installed_distributions": installed_distributions, "module_locations": module_locations}
 
 
 def _inside(path: Path, root: Path) -> Path:

@@ -626,18 +626,17 @@ def main(root: str | None = None) -> None:
 
     # ── 视频页布局：左侧数据卡+互动+评论，右侧相关推荐（Bilibili 式）──
     workspace_key = f"workspace_{run['run_id']}"
-    proof_mode = st.session_state.get(workspace_key, "编辑与校样" if st.query_params.get("view") == "proof" else "数据与绘图") == "编辑与校样"
+    with st.container(key="rd_workspaces"):
+        workspace = st.segmented_control("工作区", ["数据与绘图", "编辑与校样"], default="编辑与校样" if st.query_params.get("view") == "proof" else "数据与绘图", key=workspace_key)
+    proof_mode = workspace == "编辑与校样"
+    if proof_mode:
+        st.query_params["view"] = "proof"
+    elif "view" in st.query_params:
+        del st.query_params["view"]
     page_l, page_r = (st.container(), None) if proof_mode else st.columns([4, 1.3])
     with page_l, st.container(key="rd_detail"):
         st.markdown(detail_html(run), unsafe_allow_html=True)
-        workspace = st.segmented_control("工作区", ["数据与绘图", "编辑与校样"], default="编辑与校样" if st.query_params.get("view") == "proof" else "数据与绘图", key=workspace_key)
-        if workspace == "编辑与校样":
-            st.query_params["view"] = "proof"
-        elif "view" in st.query_params:
-            del st.query_params["view"]
-        if (workspace == "编辑与校样") != proof_mode:
-            st.rerun()
-        if workspace == "编辑与校样":
+        if proof_mode:
             from research_data.proof_ui import render as render_proof_ui
             render_proof_ui(st, catalog, run)
         else:

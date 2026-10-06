@@ -35,6 +35,7 @@ ResearchData 借鉴 QCoDeS 的实验/run、参数、数据集与来源记录方�
 - 分析图另建 run，保存输入 run/artifact ID、文件哈希、配方、软件版本与绘图源码。
 - 自动匹配的 Codex skill；agent 使用同一套 API/CLI，Julia 等程序只需将输出写入指定文件夹。
 - 数据详情页支持本地编辑与 journal-style 校样：内置 Three Interact 可添加矢量内容、组件和 3D 视口，冻结带输入哈希的 HTML/PDF/场景 revision，并在图注或稳定元素 ID 上添加评论。详见 [编辑与校样](docs/PROOFS.md)。
+- 0.5.1 根据两个独立 agent 的实际使用改进入口、版本导航、保存进度、运行版本和命令指南；反馈与验证见 [使用评审](docs/AGENT-REVIEW.md)。
 
 ## 安装并打开
 
