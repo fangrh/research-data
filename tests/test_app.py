@@ -170,3 +170,47 @@ def test_project_dir_query_parameter_selects_template_project(tmp_path, monkeypa
     app.query_params["project_dir"] = str(project)
     app.run()
     assert next(item for item in app.text_input if item.key == "project_dir").value == str(project)
+import sys
+from pathlib import Path
+
+APP = Path(r"D:\research-data\src\research_data\app.py")
+
+
+def test_big_catalog_browse_basket_flow(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["streamlit"])
+    from research_data.catalog import Catalog
+    from streamlit.testing.v1 import AppTest
+
+    cat = Catalog(tmp_path / "catalog")
+    source = tmp_path / "v.csv"
+    source.write_text("x,y\n1,2\n2,4\n", encoding="utf-8")
+    # 301 runs -> 触发 >300 的"总列表 + 对比篮"路径
+    for i in range(301):
+        with cat.run(title=f"sweep {i:03d}", project="big", kind="simulation",
+                     parameters={"file_count": 1}) as run:
+            run.add_artifact(source, profile={"x": "x", "units": {"y": "A"}})
+    monkeypatch.setenv("RESEARCH_DATA_CATALOG", str(cat.root))
+    app = AppTest.from_file(APP, default_timeout=120).run()
+
+    def widget(collection, label):
+        return next(item for item in collection
+                    if item.label == label or getattr(item, "key", None) == label)
+
+    # 大目录路径：没有巨型多选框，有总列表与对比篮
+    assert not any(getattr(w, "label", "") == "选择运行（可多选比较）" for w in app.multiselect)
+    assert "runs_table" in app.session_state  # st.dataframe 总列表已挂载
+    assert widget(app.button, "加入对比")
+    assert widget(app.button, "加载所选运行")
+    # 默认自动选中最新一条；加入对比把当前 run 放进篮子（chip 出现）；
+    # 输入集合仍为该 run 自身（与自身去重），数据可加载
+    widget(app.button, "加入对比").click().run()
+    assert any(k.startswith("drop_") for k in app.session_state)
+    widget(app.button, "加载所选运行").click().run()
+    assert not list(app.exception)
+    assert "datasets" in app.session_state and len(app.session_state["datasets"]) == 1
+    widget(app.button, "生成图表").click().run()
+    assert not list(app.exception)
+    assert "figure" in app.session_state
+    # 搜索过滤走索引路径且不炸
+    widget(app.text_input, "搜索标题 / 描述 / 标签").set_value("sweep 29").run()
+    assert not list(app.exception)
