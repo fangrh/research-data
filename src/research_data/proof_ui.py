@@ -27,8 +27,40 @@ def proof_context(catalog, run):
     return catalog.get(manifest["run_id"]), expected
 
 
+def reconstruct_upgrade(catalog, draft, replace_id, reset_token=None):
+    """Rebuild a legacy raster panel from its frozen, hash-checked source."""
+    from .figure_editor import plotly_seed
+    from .plotting import render_plot
+    if not draft.get("recipe"):
+        raise ValueError("此草稿没有冻结绘图配方，无法精确升级")
+    inputs = copy.deepcopy(draft.get("inputs") or [])
+    datasets, labels = [], []
+    for item in inputs:
+        if not isinstance(item, dict) or not item.get("run_id") or not item.get("artifact_id") or not item.get("sha256"):
+            raise ValueError("冻结输入清单不完整，无法升级")
+        artifact = catalog.select_artifact(item["run_id"], item["artifact_id"])
+        if artifact.get("sha256") != item["sha256"]:
+            raise ValueError(f"输入 {item['artifact_id']} 已变化，拒绝升级")
+        datasets.append(catalog.load_dataset(item["run_id"], artifact_id=item["artifact_id"]))
+        labels.append((catalog.get(item["run_id"]).get("title") or item["run_id"]))
+    editor = draft.get("editor") or {}
+    figure = editor.get("seed_plotly")
+    exact_seed = figure is not None
+    if figure is None:
+        if not datasets:
+            raise ValueError("没有可重建的冻结输入")
+        figure = render_plot(datasets, draft["recipe"], labels=labels)
+    payload = copy.deepcopy(draft)
+    plotly_seed(payload, figure, inputs, draft["recipe"], replace_id,
+                expected_draft_hash=draft.get("hash"), reset_token=reset_token)
+    if not exact_seed:
+        payload.setdefault("editor", {})["upgrade_warning"] = "原始 Plotly 图未保存；已按冻结配方重建，标签采用来源运行标题。"
+    payload.setdefault("editor", {})["upgrade_source_verified"] = True
+    return payload
+
+
 def _seed(st, catalog, run):
-    from .figure_editor import initial_payload
+    from .figure_editor import initial_payload, plotly_seed
     from .plotting import render_plot
     from .dataset_view import default_recipe
     figure, inputs, recipe = None, [], {}
@@ -44,19 +76,6 @@ def _seed(st, catalog, run):
             figure = render_plot([ds], recipe, labels=[run["title"]])
             inputs = [st.session_state["dataset_ids"][index]]
     else:
-        images = [a for a in run.get("artifacts", []) if a.get("format") in {"png", "jpg", "jpeg"}]
-        if images:
-            from .catalog import _inside, _sha
-            artifact = images[0]
-            path = _inside(catalog.root / "runs" / run["run_id"], artifact["path"])
-            if _sha(path) != artifact["sha256"]:
-                raise ValueError("输入图片完整性校验失败")
-            import io
-            from PIL import Image
-            output = io.BytesIO()
-            with Image.open(path) as image:
-                image.convert("RGB").save(output, format="PNG")
-            return initial_payload(run, output.getvalue(), [{"run_id": run["run_id"], "artifact_id": artifact["artifact_id"], "sha256": artifact["sha256"]}])
         from .dataset_view import artifact_inventory
         candidates = [a for a in artifact_inventory(run) if a.get("loadable")]
         preferred = st.session_state.get("viewer_artifact_id")
@@ -68,10 +87,24 @@ def _seed(st, catalog, run):
             if recipe:
                 figure = render_plot([ds], recipe, labels=[run["title"]])
                 inputs = [{"run_id": run["run_id"], "artifact_id": artifact["artifact_id"], "sha256": artifact["sha256"]}]
+        if figure is None:
+            images = [a for a in run.get("artifacts", []) if a.get("format") in {"png", "jpg", "jpeg"}]
+            if images:
+                from .catalog import _inside, _sha
+                artifact = images[0]
+                path = _inside(catalog.root / "runs" / run["run_id"], artifact["path"])
+                if _sha(path) != artifact["sha256"]:
+                    raise ValueError("输入图片完整性校验失败")
+                import io
+                from PIL import Image
+                output = io.BytesIO()
+                with Image.open(path) as image:
+                    image.convert("RGB").save(output, format="PNG")
+                return initial_payload(run, output.getvalue(), [{"run_id": run["run_id"], "artifact_id": artifact["artifact_id"], "sha256": artifact["sha256"]}])
     payload = initial_payload(run, None, inputs, recipe)
     if figure is not None:
         # Render in the user's existing browser; the draft does not require a second headless Chrome.
-        payload["editor"]["seed_plotly"] = json.loads(figure.to_json())
+        plotly_seed(payload, figure, inputs, recipe)
     return payload
 
 
@@ -188,6 +221,10 @@ def _canvas(st, store, catalog, run, rid, prefix, draft, saved_error):
             payload = copy.deepcopy(draft)
             payload.update(scene=value["scene"], assets=value.get("assets", {}),
                            editor={**value.get("editor", {}), "upstream": vendor_metadata()})
+            if value.get("editor", {}).get("plot_sources"):
+                payload["editor"]["plot_sources"] = value["editor"]["plot_sources"]
+            if value.get("editor", {}).get("legacybackup"):
+                payload["editor"]["legacybackup"] = value["editor"]["legacybackup"]
             # Never retain a stale rendered image across a scene edit.
             payload.pop("figure_png", None)
             if value.get("figure_png"):
@@ -213,6 +250,21 @@ def _canvas(st, store, catalog, run, rid, prefix, draft, saved_error):
         if col_b.button("重新载入本地草稿", key=prefix + "reload"):
             st.session_state[prefix + "reset"] = st.session_state.get(prefix + "reset", 0) + 1
             st.rerun()
+    legacy = next((e for e in draft.get("scene", {}).get("elements", {}).values()
+                   if e.get("type") == "image" and e.get("name") == "Data plot · panel a"), None)
+    if legacy:
+        if draft.get("recipe"):
+            if st.button("升级旧图像面板为可编辑绘图", key=prefix + "upgrade"):
+                try:
+                    reset = st.session_state.get(prefix + "reset", 0) + 1
+                    upgraded = reconstruct_upgrade(catalog, draft, legacy["id"], reset)
+                    store.save_draft(rid, upgraded, expected_hash=draft["hash"])
+                    st.session_state[prefix + "reset"] = reset
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"无法准备升级：{exc}")
+        else:
+            st.info("此旧草稿没有冻结绘图配方，无法精确升级；请从当前数据图新建草稿。")
     if not draft["scene"]["elements"] and not draft.get("editor", {}).get("seed_plotly"):
         if st.button("导入当前数据图", key=prefix + "seed"):
             try:

@@ -35,10 +35,16 @@ research-data guide proof --json
 ```
 
 Use the run detail page's “工作区 编辑与校样” → “从当前数据图创建草稿”.
-The bundled Three Interact editor keeps the plot pixels as a base panel while
-allowing vector labels, shapes, images, components and 3D viewports. Configure
-data-axis typography and panel settings in the plotting workspace before seeding
-the editor; editor changes do not alter data values or recipes. Fill the article
+Submit structured datasets and recipes, retaining Plotly figure JSON for custom
+plots. The bundled editor imports curves, individual markers, axes/ticks,
+legend text and heatmap cells as independently selectable native elements.
+Each element retains its plot role and source identity; editing its presentation
+does not alter original data values or recipes. A PNG/JPEG alone remains an image;
+never claim its internal curves or points are editable. Existing image drafts
+have an explicit upgrade from verified frozen inputs/recipe. Unsupported SVG
+features, smoothing and scenes above 10,000 elements reject conversion atomically;
+split panels or explicitly reduce data, never silently flatten or truncate.
+Fill the article
 content and choose `single` or `double`, then save and generate a proof with the
 PNG rendered for that exact scene event.
 

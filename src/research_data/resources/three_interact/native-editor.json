@@ -1,0 +1,33 @@
+{
+  "schema": "research-data.three-interact-native-overlays.v1",
+  "upstream": {
+    "repository": "https://github.com/fangrh/three-interact",
+    "commit": "d5a32605d5867bf8ecb1811651d66ae848c95d9a"
+  },
+  "overlays": {
+    "src/model.ts": {
+      "file": "native-model.ts",
+      "base_sha256": "F081C55C9344EFFFB507731B8BBC4E65450984C39340ABE50A4AB5C1426BF8D9",
+      "overlay_sha256": "b42f7cf2d1fe029c012439bf4b9a919ff104fc2e31ba099813a533757f210cd6"
+    },
+    "webview/renderer2d.ts": {
+      "file": "native-renderer2d.ts",
+      "base_sha256": "B90FA747186B28955A8E0E7D2D1EAC8FF72A9C06DEF31B88EBE14C60EF5A80FB",
+      "overlay_sha256": "4e8e648ba0a661a264e025ec82ed11ff51dcfefeae1396fac7f92701ad507cd5"
+    },
+    "src/export2d.ts": {
+      "file": "native-export2d.ts",
+      "base_sha256": "35281888504445BBC3E25676768CB9CDDF9C3C8543C383FD3B373E3CF0C45A55",
+      "overlay_sha256": "2e6c5aa654b4f5983f761b5f5390f3ddd23ffb34b0450a51244873d7483bdb39"
+    },
+    "webview/main.ts": {
+      "file": "native-main.ts",
+      "base_sha256": "A04052B65A928255ED639A5F986FC375DB2E6E318CD3FF5239EE18A80941D65F",
+      "overlay_sha256": "c4bc706dfd59d1d3b5e42c42ff87faf1f41f960dad8738c405ba40e0525fd2bf"
+    }
+  },
+  "helper": {
+    "file": "native-svgStyle.ts",
+    "sha256": "376e24c41f4beaef64141332f23c0d8b6adab8fb375d64895e52ac3c73835fc0"
+  }
+}

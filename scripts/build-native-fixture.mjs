@@ -1,0 +1,10 @@
+import {plugin,upstream,dest} from './vendor-three-interact.mjs';
+import {createRequire} from 'node:module';
+import {join,resolve} from 'node:path';
+import {mkdir,writeFile,cp} from 'node:fs/promises';
+const root=resolve(dest,'../../../..'),out=join(root,'.artifacts/native-fixture');await mkdir(out,{recursive:true});
+const {build}=createRequire(join(upstream,'package.json'))('esbuild');
+await build({entryPoints:[join(root,'tests/native_plot_fixture.ts')],outfile:join(out,'fixture.js'),bundle:true,format:'iife',platform:'browser',plugins:[plugin],nodePaths:[join(upstream,'node_modules')]});
+await cp(dest,join(out,'editor'),{recursive:true});
+await writeFile(join(out,'index.html'),`<!doctype html><meta charset="utf-8"><title>Native Plot acceptance</title><style>body{margin:0;font:14px Arial}nav{padding:10px}iframe{width:100%;height:770px;border:0}pre{white-space:pre-wrap}#export svg{max-width:900px}textarea{width:90%;height:120px}</style><nav><label>Fixture <select>${['scatter','line','compare','complex','heatmap','panels','log','rich','limit','smooth','legacy'].map(n=>`<option>${n}</option>`).join('')}</select></label> <button id="audit">Audit</button> <button id="reload">Reload saved</button> <button id="save">Roundtrip</button> <button id="compare">Compare fidelity</button></nav><iframe src="editor/index.html"></iframe><pre id="summary"></pre><pre id="comparison"></pre><textarea id="scene" aria-label="Scene snapshot" readonly></textarea><div id="export"></div><script src="fixture.js"></script>`);
+console.log(out);

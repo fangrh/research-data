@@ -1,12 +1,14 @@
-// ResearchData host bridge for the unmodified Three Interact editor.
-// The scene model, renderer, inspector and component library are upstream code.
+// ResearchData host bridge, with pinned native SVG editor overlays.
 import { applyOperation, createElement, createScene, validateScene, isLocked, type Scene, type Operation, type ClientMessage } from '@three/model';
 import { builtInComponents, parseComponent } from '@three/components';
 import { createElementClipboard, pasteElementClipboard } from '@three/elementClipboard';
 import { serializeSvg } from '@three/export2d';
+import { importPlot } from './plot_import';
 
 let scene: Scene = createScene('2d'), assets: Record<string,string> = {}, version = 0;
 let history: any[] = [], orders: any[] = [], selection: string[] = [], ui: any = {}, identity = '';
+let editorMetadata:any={}, seedAttempt='';
+const editorState=()=>({...editorMetadata,history,orders,selection,version,components:customComponents});
 let parentHash = '', dirty = false, resetToken: any = null, seeding = false, readyResolve: () => void;
 const ready = new Promise<void>(resolve => readyResolve = resolve);
 const undoStack: Scene[] = [], redoStack: Scene[] = [];
@@ -61,7 +63,7 @@ async function refresh() {
 function emit(action:string, extra:any={}, eventId=crypto.randomUUID()) {
   if(action==='autosave'){if(exportAction||exportPreparing){exportAutosaveDeferred=true;return;}if(autosaveEventId){autosaveDeferred=true;return;}autosaveEventId=eventId;autosaveVersion=version;}
   streamlit('streamlit:setComponentValue',{value:{event_id:eventId,action,scene:structuredClone(scene),assets:structuredClone(assets),
-    base_hash:parentHash,editor:{history,orders,selection,version,components:customComponents},...extra},dataType:'json'});
+    base_hash:parentHash,editor:editorState(),...extra},dataType:'json'});
   if(action==='autosave')notice('编辑已同步到本地草稿');else if(!exportAction)notice('正在保存到本地资料库…');
 }
 function autosave() { clearTimeout(debounce); if(exportAction||exportPreparing){exportAutosaveDeferred=true;return;} if(autosaveEventId){autosaveDeferred=true;return;} debounce=setTimeout(()=>{debounce=undefined;if(exportAction||exportPreparing){exportAutosaveDeferred=true;return;}if(autosaveEventId){autosaveDeferred=true;return;}emit('autosave');},650); }
@@ -90,13 +92,24 @@ async function imageData(file:File){if(!['image/png','image/jpeg'].includes(file
   const data=await new Promise<string>((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(String(r.result));r.onerror=reject;r.readAsDataURL(file);});
   const img=new Image();img.src=data;await img.decode();if(img.naturalWidth*img.naturalHeight>16*1024*1024)throw Error('图片像素过多');return {data,width:img.naturalWidth,height:img.naturalHeight};}
 async function png(svg:string){const img=new Image();const url=URL.createObjectURL(new Blob([svg],{type:'image/svg+xml'}));try{img.src=url;await img.decode();const canvas=document.createElement('canvas');const scale=Math.min(2,2400/Math.max(img.naturalWidth,img.naturalHeight));canvas.width=Math.max(1,Math.ceil(img.naturalWidth*scale));canvas.height=Math.max(1,Math.ceil(img.naturalHeight*scale));const ctx=canvas.getContext('2d')!;ctx.fillStyle='white';ctx.fillRect(0,0,canvas.width,canvas.height);ctx.drawImage(img,0,0,canvas.width,canvas.height);return canvas.toDataURL('image/png');}finally{URL.revokeObjectURL(url);}}
-async function requestExport(action:'save'|'publish'){if(exportAction||exportPreparing){notice('正在导出，请稍候');return;}const token=++exportRequestToken;exportPreparing=true;exportUi('preparing');try{clearTimeout(debounce);debounce=undefined;await flushInspectorEdits();await waitForAutosaveAcknowledgement();if(token!==exportRequestToken||exportAction){exportPreparing=false;return;}}catch(error){if(token!==exportRequestToken)return;inspectorFlush=Promise.resolve();exportPreparing=false;exportUi('error',`图形属性提交失败：${String((error as Error).message||error)}。请重试`);return;}
+async function requestExport(action:'save'|'publish'){if(exportAction||exportPreparing){notice('正在导出，请稍候');return;}const token=++exportRequestToken;exportPreparing=true;exportUi('preparing');try{clearTimeout(debounce);debounce=undefined;await flushInspectorEdits();await queue;await refresh();await waitForAutosaveAcknowledgement();if(token!==exportRequestToken||exportAction){exportPreparing=false;return;}}catch(error){if(token!==exportRequestToken)return;inspectorFlush=Promise.resolve();exportPreparing=false;exportUi('error',`图形属性提交失败：${String((error as Error).message||error)}。请重试`);return;}
   exportAction=action;exportEventId=crypto.randomUUID();exportVersion=version;exportScene=scene;exportAutosaveDeferred=false;exportPreparing=false;exportUi('rendering');
   send({type:'exportRequest',event_id:exportEventId,action});}
-async function seedPlot(figure:any){if(seeding||Object.keys(scene.elements).length)return;seeding=true;const plot=document.createElement('div');plot.style.cssText='position:fixed;left:-20000px;top:0;width:1000px;height:620px';document.body.append(plot);
-  try{const Plotly=(window as any).Plotly;await Plotly.newPlot(plot,figure.data,{...figure.layout,width:1000,height:620},{staticPlot:true});const data=await Plotly.toImage(plot,{format:'png',width:1000,height:620,scale:1.5});
-    const element=createElement('image','2d');element.name='Data plot · panel a';element.properties={src:'data-plot.png',width:800,height:496,opacity:1};assets['data-plot.png']=data;await edit({kind:'insert',element});send({type:'workOrderSelected',ids:[element.id]});
-  }finally{(window as any).Plotly?.purge(plot);plot.remove();seeding=false;}}
+async function seedPlot(figure:any,request:any={}){
+  const token=request.token||await sha(JSON.stringify(figure));
+  if(seeding||seedAttempt===token||editorMetadata.plot_sources?.some((s:any)=>s.id===token)||(!request.replace_element_id&&Object.keys(scene.elements).length))return;
+  seeding=true;seedAttempt=token;notice('正在导入可独立编辑的绘图元素…');
+  const seedScene=scene,seedIdentity=identity,seedVersion=version;
+  try{const result=await importPlot(figure,scene,{...request,token});
+    if(scene!==seedScene||identity!==seedIdentity||version!==seedVersion)throw Error('导入期间草稿发生变化，请重新载入后重试');
+    editorMetadata.plot_sources=[...(editorMetadata.plot_sources||[]),result.source];
+    if(request.replace_element_id)editorMetadata.legacybackup=[...(editorMetadata.legacybackup||[]),{at:new Date().toISOString(),element:result.source.original_element,assets:structuredClone(assets)}];
+    delete editorMetadata.seed_plotly;delete editorMetadata.seed_plotly_request;
+    selection=[];await change(result.scene,request.replace_element_id?'Upgrade raster plot to native elements':'Import native plot','plot-import');
+    if(!request.replace_element_id)requestAnimationFrame(()=>document.querySelector<HTMLButtonElement>('[data-testid="fit-scene"]')?.click());
+    notice(`已导入 ${result.source.element_ids.length} 个独立元素 · 点击位点、曲线或文字编辑`);
+  }catch(error){notice(`导入未完成：${String((error as Error).message||error)}`);send({type:'error',message:String((error as Error).message||error)});}
+  finally{seeding=false;}}
 function menu(){if(document.querySelector('.proof-menu'))return;const bar=document.createElement('nav');bar.className='proof-menu';bar.setAttribute('aria-label','ResearchData 图形编辑工具');bar.innerHTML='<span class="proof-label">编辑工具</span><span class="proof-group" data-host-controls aria-label="编辑"><button data-action="undo">撤销</button><button data-action="redo">重做</button><button data-action="front">置于顶层</button></span><span class="proof-group" data-host-controls aria-label="导入与源文件"><button data-action="open">导入场景 / 组件</button><button data-action="source">场景 JSON</button></span><span class="proof-group proof-actions" data-host-controls aria-label="保存与发布"><button data-action="save">保存编辑</button><button data-action="publish" class="primary">保存并生成校样</button></span><small data-proof-status role="status" aria-live="polite">拖动图形，或在左侧添加组件</small>';document.body.prepend(bar);
   // The upstream renderer owns its controls' enabled state; only host buttons
   // carry data-host-controls, which upstream deliberately skips.
@@ -110,6 +123,7 @@ function menu(){if(document.querySelector('.proof-menu'))return;const bar=docume
 let customComponents:any[]=[];
 function components(){send({type:'components',entries:[...builtInComponents(),...customComponents],warnings:[],directory:'ResearchData · 内置 / 当前草稿'});}
 async function handle(m:ClientMessage){
+  if((m as any).type==='exportFailed'){if((m as any).event_id===exportEventId)finishExport(exportEventId,false,`导出失败：${(m as any).message}。请重试`);return;}
   if('version'in m&&m.version!==version)throw Error('场景版本已变化，请重试');
   if(m.type==='ready'){menu();components();await refresh();return;}
   if(m.type==='selection'){selection=m.ids;return;}
@@ -126,7 +140,7 @@ async function handle(m:ClientMessage){
     if(m.format!=='svg')throw Error('校样使用2D画布；3D内容可添加为视窗');const svg=serializeSvg(scene,assets,m.viewportImages);
     const action=exportAction;const eventId=exportEventId;const snapshotVersion=exportVersion;const snapshotScene=exportScene;
     if(action){exportUi('generating');try{const figure_png=await png(svg);if(version!==snapshotVersion||scene!==snapshotScene){finishExport(eventId,false,'导出期间场景发生变化，请再次保存');return;}
-        emit(action,{figure_png,figure_svg:svg,editor:{history,orders,selection,version,components:customComponents}},eventId);
+        emit(action,{figure_png,figure_svg:svg,editor:editorState()},eventId);
       }catch(error){finishExport(eventId,false,`导出失败：${String((error as Error).message||error)}。请重试`);}}
     else download('figure.svg',svg,'image/svg+xml');return;
   }
@@ -136,7 +150,7 @@ async function handle(m:ClientMessage){
   if(m.type==='elementPaste'){let text=clipboard;try{text=await navigator.clipboard.readText()||text;}catch{}const pasted=pasteElementClipboard(text,scene,uri());await edit({kind:'insertMany',elements:pasted.elements});send({type:'elementPasted',ids:pasted.rootIds});return;}
   if(m.type==='componentsRefresh'){components();return;}
   if(m.type==='componentSave'){const ids=new Set(m.ids);let changed=true;while(changed){changed=false;for(const e of Object.values(scene.elements))if(e.parent&&ids.has(e.parent)&&!ids.has(e.id)){ids.add(e.id);changed=true;}}const elements:any={};for(const id of ids){const e=structuredClone(scene.elements[id]);if(!e)continue;if(e.parent&&!ids.has(e.parent))delete e.parent;elements[id]=e;}
-    const entry=parseComponent(JSON.stringify({schema:'three-interact.component',version:1,name:scene.elements[m.ids[0]]?.name||'Custom',id:`custom-${crypto.randomUUID()}`,category:'Local',mode:scene.mode,elements}));customComponents.push({...entry,source:'当前草稿'});components();emit('autosave',{editor:{history,orders,selection,version,components:customComponents}});return;}
+    const entry=parseComponent(JSON.stringify({schema:'three-interact.component',version:1,name:scene.elements[m.ids[0]]?.name||'Custom',id:`custom-${crypto.randomUUID()}`,category:'Local',mode:scene.mode,elements}));customComponents.push({...entry,source:'当前草稿'});components();emit('autosave',{editor:editorState()});return;}
   if(m.type==='componentGuideCopy'){await copy('Create a three-interact.component v1 inert JSON definition with stable element UUIDs; import it into ResearchData. Retain original scientific source and avoid executing scene source.');return;}
   if(m.type==='workOrderAdd'){const at=new Date().toISOString();const context=await handoff();const order={id:crypto.randomUUID(),sequence:orders.length+1,sceneUri:uri(),sceneId:scene.id,snapshotHash:context.scene_sha256,selectedIds:m.ids,requirement:m.requirement,context:{...context,history:m.historySequence?history.find(h=>h.sequence===m.historySequence):null},status:'open',createdAt:at,history:[{event:'created',at,status:'open'}]};orders.push(order);send({type:'workOrderAdded',id:order.id,requirement:order.requirement});await refresh();emit('autosave');return;}
   if(m.type==='historyRefresh'||m.type==='workOrderRefresh'){await refresh();return;}
@@ -150,12 +164,13 @@ try { const stored=localStorage.getItem(themeStorageKey),valid=stored==='light'|
 window.addEventListener('message',event=>{if(event.source!==parent||event.data?.type!=='streamlit:render')return;
   const args=event.data.args, payload=args.payload, acknowledged=String(args.acknowledged_event||'');
   try{const saveError=String(args.save_error||'');if(!payload?.scene){acknowledgeAutosave(acknowledged,saveError);if(exportAction&&acknowledged===exportEventId){finishExport(exportEventId,!saveError,saveError||String(args.saved_notice||'')|| (exportAction==='publish'?'校样已生成':'编辑已保存'));}return;}validateScene(payload.scene);const nextIdentity=String(args.identity);
-    if(identity!==nextIdentity||args.reset_token!==resetToken){if(exportAction||exportPreparing){exportRequestToken++;cancelAutosave('编辑已重新载入，之前的自动保存已取消');exportAutosaveDeferred=false;if(exportAction)finishExport(exportEventId,false,'编辑已重新载入，之前的导出已取消');else{exportPreparing=false;exportUi('error','编辑已重新载入，之前的导出已取消');}}else cancelAutosave();scene=structuredClone(payload.scene);assets={...(payload.assets||{})};history=payload.editor?.history||[];orders=payload.editor?.orders||[];selection=payload.editor?.selection||[];customComponents=payload.editor?.components||[];version=payload.editor?.version||0;undoStack.length=0;redoStack.length=0;identity=nextIdentity;resetToken=args.reset_token;dirty=false;}
+    if(identity!==nextIdentity||args.reset_token!==resetToken){if(exportAction||exportPreparing){exportRequestToken++;cancelAutosave('编辑已重新载入，之前的自动保存已取消');exportAutosaveDeferred=false;if(exportAction)finishExport(exportEventId,false,'编辑已重新载入，之前的导出已取消');else{exportPreparing=false;exportUi('error','编辑已重新载入，之前的导出已取消');}}else cancelAutosave();scene=structuredClone(payload.scene);assets={...(payload.assets||{})};history=payload.editor?.history||[];orders=payload.editor?.orders||[];selection=payload.editor?.selection||[];customComponents=payload.editor?.components||[];version=payload.editor?.version||0;undoStack.length=0;redoStack.length=0;identity=nextIdentity;resetToken=args.reset_token;dirty=false;editorMetadata={...(payload.editor||{})};seedAttempt="";}
+    if(!Object.keys(editorMetadata).length)editorMetadata={...(payload.editor||{})};
     parentHash=String(args.draft_hash||'');
     acknowledgeAutosave(acknowledged,saveError);const exportAcknowledged=!!exportAction&&acknowledged===exportEventId;
     if(exportAcknowledged){const saveError=String(args.save_error||'');finishExport(exportEventId,!saveError,saveError||String(args.saved_notice||'')|| (exportAction==='publish'?'校样已生成':'编辑已保存'));}
     if(saveError){dirty=true;exportFailureNotice=saveError;}else if(!exportAction&&payload.editor?.version===version)dirty=false;readyResolve();
-    enqueue(async()=>{components();await refresh();if(exportFailureNotice)notice(exportFailureNotice);else if(args.saved_notice)notice(args.saved_notice);else if(!exportAcknowledged)notice('已连接本地草稿 · 编辑自动保存');streamlit('streamlit:setFrameHeight',{height:760});if(payload.editor?.seed_plotly)await seedPlot(payload.editor.seed_plotly);});
+    enqueue(async()=>{components();await refresh();if(exportFailureNotice)notice(exportFailureNotice);else if(args.saved_notice)notice(args.saved_notice);else if(!exportAcknowledged)notice('已连接本地草稿 · 编辑自动保存');streamlit('streamlit:setFrameHeight',{height:760});if(payload.editor?.seed_plotly)await seedPlot(payload.editor.seed_plotly,payload.editor.seed_plotly_request);});
   }catch(error){notice(String(error));}
 });
 document.addEventListener('keydown',event=>{if(!(event.ctrlKey||event.metaKey))return;if(event.key.toLowerCase()==='s'){event.preventDefault();void requestExport('save');}else if(! (event.target as HTMLElement).closest('input,textarea,select')&&['z','y'].includes(event.key.toLowerCase())){event.preventDefault();event.stopImmediatePropagation();enqueue(()=>event.key.toLowerCase()==='y'||event.shiftKey?redo():undo());}},true);

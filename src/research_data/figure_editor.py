@@ -49,3 +49,29 @@ def editor(payload, draft_hash, identity, reset_token=0, saved_notice="", acknow
 
 def scene_hash(payload):
     return hashlib.sha256(json.dumps({"scene": payload["scene"], "assets": payload.get("assets", {})}, sort_keys=True).encode()).hexdigest()
+
+
+def _json_hash(value):
+    return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def plotly_seed(payload, figure, inputs=None, recipe=None, replace_element_id=None, expected_draft_hash=None, reset_token=None):
+    """Attach a browser seed request while retaining exact source provenance."""
+    source = {"inputs": copy.deepcopy(inputs or []), "recipe": copy.deepcopy(recipe or {})}
+    payload.setdefault("editor", {})["seed_plotly"] = json.loads(figure.to_json()) if hasattr(figure, "to_json") else copy.deepcopy(figure)
+    payload["editor"]["seed_plotly_request"] = {
+        "token": str(uuid4()), "replace_element_id": replace_element_id,
+        "source": source, "inputs_sha256": _json_hash(source["inputs"]), "recipe_sha256": _json_hash(source["recipe"]),
+        "expected_draft_hash": expected_draft_hash, "reset_token": reset_token,
+    }
+    return payload
+
+
+def upgrade_request(draft, replace_element_id):
+    """Create an explicit, optimistic request for replacing a legacy raster panel."""
+    source = {"inputs": copy.deepcopy(draft.get("inputs") or []), "recipe": copy.deepcopy(draft.get("recipe") or {})}
+    if not source["recipe"]:
+        raise ValueError("此草稿没有冻结绘图配方，无法精确升级")
+    return {"token": str(uuid4()), "replace_element_id": replace_element_id,
+            "expected_draft_hash": draft.get("hash"), "reset_token": None,
+            "source": source, "inputs_sha256": _json_hash(source["inputs"]), "recipe_sha256": _json_hash(source["recipe"])}

@@ -8,8 +8,9 @@ from PIL import Image
 
 from research_data.catalog import Catalog
 from research_data.cli import main
-from research_data.figure_editor import RESOURCES, initial_payload, vendor_metadata
+from research_data.figure_editor import RESOURCES, initial_payload, vendor_metadata, plotly_seed, upgrade_request
 from research_data.proofs import ProofStore
+from research_data.proof_ui import reconstruct_upgrade
 
 
 def png():
@@ -70,6 +71,70 @@ def test_plot_seed_uses_existing_browser_without_static_export(tmp_path):
     assert 'seed_plotly' in payload['editor']
     assert payload['inputs'][0]['artifact_id'] == 'id'
     assert not payload['scene']['elements']
+    assert payload['editor']['seed_plotly_request']['source']['recipe'] == App.session_state['viewer_recipe']
+    assert payload['editor']['seed_plotly_request']['token']
+
+
+def test_raw_loadable_artifact_precedes_registered_png(tmp_path, monkeypatch):
+    import plotly.graph_objects as go
+    import research_data.dataset_view as dv
+    import research_data.plotting as plotting
+    from research_data.proof_ui import _seed
+
+    raw = {'run_id': 'r', 'artifact_id': 'raw', 'sha256': 'a' * 64}
+    monkeypatch.setattr(dv, 'artifact_inventory', lambda run: [{**raw, 'loadable': True}])
+    monkeypatch.setattr(plotting, 'render_plot', lambda *args, **kwargs: go.Figure(go.Scatter(x=[0], y=[1])))
+    class CatalogStub:
+        def select_artifact(self, run_id, artifact_id): return raw
+        def load_dataset(self, run_id, artifact_id=None):
+            import xarray as xr
+            return xr.Dataset({'y': ('x', [1])}, coords={'x': [0]})
+    class App: session_state = {}
+    run = {'run_id': 'r', 'title': 'raw first', 'artifacts': [{'format': 'png', 'artifact_id': 'png'}]}
+    payload = _seed(App, CatalogStub(), run)
+    assert payload['inputs'][0]['artifact_id'] == 'raw'
+    assert 'seed_plotly' in payload['editor']
+    assert not payload['scene']['elements']
+
+
+def test_upgrade_request_freezes_sources_and_preserves_scene():
+    draft = initial_payload({'title': 'legacy'}, png(), [{'run_id': 'r', 'artifact_id': 'a', 'sha256': 'b' * 64}], {'kind': 'line', 'x': 'x', 'y': ['y']})
+    draft['hash'] = 'draft-hash'
+    draft['scene']['elements']['annotation'] = {'id': 'annotation', 'type': 'text'}
+    req = upgrade_request(draft, next(iter(draft['scene']['elements'])))
+    assert req['expected_draft_hash'] == 'draft-hash'
+    assert req['source']['recipe'] == draft['recipe']
+    assert req['source']['inputs'] == draft['inputs']
+    assert req['inputs_sha256'] and req['recipe_sha256']
+    assert 'annotation' in draft['scene']['elements']
+
+
+def test_reconstruct_upgrade_verifies_hash_preserves_annotations_and_request(tmp_path):
+    import plotly.graph_objects as go
+    source = [dict(run_id='r', artifact_id='a', sha256='b' * 64)]
+    draft = initial_payload({'title': 'legacy'}, png(), source, {'kind': 'line', 'x': 'x', 'y': ['y']})
+    draft['hash'] = 'draft-hash'
+    draft['scene']['elements']['annotation'] = {'id': 'annotation', 'name': 'keep', 'type': 'text'}
+    draft['editor']['seed_plotly'] = json.loads(go.Figure(go.Scatter(x=[0], y=[1])).to_json())
+
+    class CatalogStub:
+        def select_artifact(self, run_id, artifact_id): return {'run_id': run_id, 'artifact_id': artifact_id, 'sha256': 'b' * 64}
+        def load_dataset(self, run_id, artifact_id=None):
+            import xarray as xr
+            return xr.Dataset({'y': ('x', [1])}, coords={'x': [0]})
+        def get(self, run_id): return {'title': 'source title'}
+    upgraded = reconstruct_upgrade(CatalogStub(), draft, next(iter(draft['scene']['elements'])), 3)
+    request = upgraded['editor']['seed_plotly_request']
+    assert request['expected_draft_hash'] == 'draft-hash'
+    assert request['reset_token'] == 3
+    assert request['replace_element_id']
+    assert upgraded['scene']['elements']['annotation']['name'] == 'keep'
+    assert upgraded['editor']['upgrade_source_verified'] is True
+
+    class Changed(CatalogStub):
+        def select_artifact(self, run_id, artifact_id): return {'sha256': 'c' * 64}
+    with pytest.raises(ValueError, match='已变化'):
+        reconstruct_upgrade(Changed(), draft, 'missing', 4)
 
 
 def test_proof_workspace_creates_seed_without_headless_browser(tmp_path, monkeypatch):

@@ -2,5 +2,6 @@ include .gitattributes LICENSE README.md INTERFACES.md Start-ResearchData.ps1 St
 recursive-include examples *.py *.jl *.json
 recursive-include scripts *.ps1 *.mjs
 recursive-include docs *.md *.png *.pdf *.html
+recursive-include tests *.ts *.mjs
 global-exclude *.pyc
 prune src/research_data/resources/skill/scripts/__pycache__

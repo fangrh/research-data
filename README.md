@@ -22,6 +22,7 @@ ResearchData 借鉴 QCoDeS 的实验/run、参数、数据集与来源记录方�
 
 ## 功能
 
+- 图形编辑：曲线、每个位点、坐标刻度、文字、图例和热图单元格可独立选取、修改、撤销与保存；保留原始数据及绘图配方。[说明与旧草稿升级](docs/editable-plots.md)。
 - 每次运行保存详细说明、project、sample、kind、tags、键值分类、参数、所属任务和父数据集。
 - 卡片浏览：项目分区、全文搜索、收藏、分页与文件排行；大目录（>300 运行）使用“加入对比”篮。
   SQLite 提供可重建索引；可选 Rust 扩展未安装时回退纯 Python。
@@ -224,3 +225,9 @@ python -m build
 验证包括真实 QCoDeS、跨格式合成值/坐标/单位、dirty/untracked 源码、并发登记、检索/完整性、CLI 失败记录、绘图 lineage 与 Streamlit AppTest 交互。CI 配置为 Windows/Linux。软件测试不构成物理验证。
 
 QCoDeS 参考：[数据集 API](https://microsoft.github.io/Qcodes/api/dataset/)、[测量示例](https://microsoft.github.io/Qcodes/examples/DataSet/Performing-measurements-using-qcodes-parameters-and-dataset.html)。许可：MIT；第三方依赖保留各自许可。
+
+Native editor overlay check (requires the sibling `D:\three-interact` checkout, or pass its path as the first argument):
+
+```powershell
+node --experimental-strip-types tests/native_style_overlay.mjs
+```
